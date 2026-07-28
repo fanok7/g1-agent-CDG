@@ -1,4 +1,4 @@
-# G1 Agent Aéroportuaire
+# G1 Agent Aéroportuaire 
 
 Agent vocal d'accueil pour aéroportuaire pour Charles de Gaulle aéroport, tournant sur robot **Unitree G1 EDU** (calculateur Jetson Orin NX).
 
