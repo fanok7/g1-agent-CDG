@@ -64,6 +64,8 @@ Les deux sont **gitignorés** (données locales, non versionnées).
 
 ```bash
 rm tablet_server/analytics_events.jsonl tablet_server/statistiques_robot.csv
+
+bonjour
 ```
 
 ---
