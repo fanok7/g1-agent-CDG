@@ -11,6 +11,7 @@ import asyncio
 import os
 import threading
 import subprocess
+import time
 import robot.hardware as hardware
 import robot.spotify_player as spotify_player
 from robot import hand_idle
@@ -33,15 +34,19 @@ import tools.datetime_tool    # noqa: F401
 import tools.screenshot_tool  # noqa: F401
 import tools.calendar_tool    # noqa: F401
 import tools.qr_tool          # noqa: F401
-import tools.tablet_tools     # noqa: F401 — proposer_choix + afficher_{texte,qr,plan}_ecran
+import tools.hotel_tools      # noqa: F401 — chercher_hotel (géocodage OSM + webhook n8n)
+import tools.tablet_tools     # noqa: F401 — proposer_choix / afficher_texte_ecran / afficher_qr_ecran / afficher_plan_ecran
+import tools.assistance_tool  # noqa: F401 — appeler_assistance (alerte n8n + salon Jitsi + sourdine IA)
 from tools.screenshot_tool import SCREENSHOT_DIR
+from agent.text_input import input_queue as _text_input_queue
+
 import uvicorn
 from tablet_server.server import app as tablet_app
 
 from agent.parler_client import send_emotion
 from agent.session import connect
 from agent.events import (send_audio_loop, receive_events_loop, face_greeting_loop,
-                          rps_result_loop, qr_alert_loop)
+                          rps_result_loop, qr_alert_loop, text_input_loop)
 
 
 
@@ -58,8 +63,72 @@ GESTURE_CMD_FILE    = "/tmp/gesture_cmd"
 TABLET_PORT         = 8000
 
 
+def _lan_ip():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
 def _start_tablet_server():
+    """Serveur FastAPI/SSE de la tablette annexe — thread daemon séparé
+    (uvicorn bloquant), écoute sur toutes les interfaces pour être joignable
+    depuis le wifi (192.168.0.x) comme depuis eth0 (192.168.123.x)."""
     uvicorn.run(tablet_app, host="0.0.0.0", port=TABLET_PORT, log_level="warning")
+
+
+_TABLET_BROWSERS = ["chromium-browser", "chromium", "google-chrome"]
+
+
+def _open_tablet_display():
+    """Ouvre automatiquement l'affichage de la tablette en plein écran (kiosk)
+    sur l'écran branché directement au Jetson (localhost — pas besoin du wifi,
+    donc pas affecté par l'isolation client du wifi campus). Best-effort :
+    si aucun écran/navigateur n'est disponible (robot headless en SSH), ça
+    échoue silencieusement sans jamais bloquer le reste de l'agent."""
+    if not os.environ.get("DISPLAY"):
+        return
+    url = f"http://127.0.0.1:{TABLET_PORT}"
+    for _ in range(20):
+        try:
+            import urllib.request
+            urllib.request.urlopen(url, timeout=0.5)
+            break
+        except Exception:
+            time.sleep(0.5)
+    else:
+        return
+    for browser in _TABLET_BROWSERS:
+        try:
+            subprocess.Popen(
+                [browser, "--kiosk", "--noerrdialogs", "--disable-infobars", url],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return
+        except FileNotFoundError:
+            continue
+    print("[TABLETTE] Aucun navigateur trouvé (chromium-browser/chromium/google-chrome) "
+          "— ouvre le lien manuellement.")
+
+
+def _terminal_input_loop():
+    """Alternative clavier au micro : lit le terminal en continu dans un
+    thread séparé (input() est bloquant) et pousse chaque ligne dans
+    `input_queue` — lue par agent.events.text_input_loop qui l'injecte dans
+    la conversation Realtime exactement comme si le micro l'avait captée.
+    Utile pour discuter avec le robot sans micro (ou environnement bruyant)."""
+    while True:
+        try:
+            text = input("\nVous : ").strip()
+        except (KeyboardInterrupt, EOFError):
+            return
+        if text:
+            _text_input_queue.put(text)
 
 send_emotion("content")
 
@@ -143,29 +212,75 @@ async def run():
     led.idle()
     spotify_player.start()
     threading.Thread(target=hand_idle.start, daemon=True).start()
+    threading.Thread(target=_terminal_input_loop, daemon=True).start()
     threading.Thread(target=_start_tablet_server, daemon=True).start()
-    print(f"[G1] Tablette : http://0.0.0.0:{TABLET_PORT} (miroir écran — micro/voix restent sur le robot)")
-    ws = await connect()
-    print('[G1] Prêt. Parle pour commencer. (Ctrl+C pour quitter)')
+    threading.Thread(target=_open_tablet_display, daemon=True).start()
+    # ── Infrastructure PERSISTANTE (indépendante de la connexion OpenAI) ──────
+    # Vision + gestes tournent en continu comme tâches de fond : une reconnexion
+    # de l'agent ne les coupe JAMAIS (pas de coupure caméra à chaque hoquet
+    # réseau). Créées une seule fois pour toute la session.
+    infra = [
+        asyncio.ensure_future(_supervise(VISION_SRV_SCRIPT, "vision_server", PYTHON38)),
+        asyncio.ensure_future(_supervise(FACE_ID_SCRIPT,    "face_id",       MINICONDA_PYTHON)),
+        #asyncio.ensure_future(_supervise(VISION_FALL_SCRIPT, "fall_detection", PYTHON38, ["-c", VISION_FALL_CONFIG])),
+        #asyncio.ensure_future(_supervise(VISION_FIRE_SCRIPT, "fire_detection", PYTHON38, ["-c", VISION_FIRE_CONFIG])),
+        asyncio.ensure_future(_gesture_cmd_loop()),
+    ]
+
+    print('=' * 60)
+    print(f'[TABLETTE] Ouvre ce lien pour voir l\'écran : http://{_lan_ip()}:{TABLET_PORT}')
+    print('=' * 60)
+    print('[G1] Prêt. Parle pour commencer, ou tape ton message + Entrée (Ctrl+C pour quitter)')
+
+    # ── Boucle de RECONNEXION de l'agent ─────────────────────────────────────
+    # Si la WebSocket OpenAI tombe (coupure réseau, timeout keepalive, fermeture
+    # serveur…), on se reconnecte automatiquement au lieu de crasher. Essentiel
+    # pour un robot d'accueil autonome qui tourne toute la journée. Backoff
+    # exponentiel (2→4→8…→30s max) pour ne pas marteler l'API en cas de panne.
+    backoff = 2
     try:
-        await asyncio.gather(
-            send_audio_loop(ws),
-            receive_events_loop(ws),
-            face_greeting_loop(ws),
-            rps_result_loop(ws),
-            #fall_alert_loop(ws),
-            #fire_alert_loop(ws),
-            qr_alert_loop(ws),
-            _supervise(VISION_SRV_SCRIPT,  "vision_server", PYTHON38),
-            _supervise(FACE_ID_SCRIPT,     "face_id",       MINICONDA_PYTHON),
-            #_supervise(VISION_FALL_SCRIPT, "fall_detection", PYTHON38,
-            #           ["-c", VISION_FALL_CONFIG]),
-            #_supervise(VISION_FIRE_SCRIPT, "fire_detection", PYTHON38,
-            #           ["-c", VISION_FIRE_CONFIG]),
-            _gesture_cmd_loop(),
-        )
+        while True:
+            ws = None
+            try:
+                ws = await connect()
+                print('[G1] Connecté à OpenAI — agent actif.')
+                backoff = 2   # remise à zéro après une connexion réussie
+                await asyncio.gather(
+                    send_audio_loop(ws),
+                    receive_events_loop(ws),
+                    face_greeting_loop(ws),
+                    rps_result_loop(ws),
+                    text_input_loop(ws),
+                    #fall_alert_loop(ws),
+                    #fire_alert_loop(ws),
+                    qr_alert_loop(ws),
+                )
+            except asyncio.CancelledError:
+                raise   # arrêt volontaire (Ctrl+C) → surtout ne pas reconnecter
+            except Exception as e:
+                print(f'[G1] Connexion agent perdue ({type(e).__name__}: {e}) — '
+                      f'reconnexion dans {backoff}s…')
+            finally:
+                # Nettoyage à chaque coupure : ferme la WS, coupe la parole en
+                # cours, retire le flag qui bloquerait le micro à la reconnexion.
+                if ws is not None:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                try:
+                    get_audio_client().PlayStop('chat')
+                except Exception:
+                    pass
+                try:
+                    os.remove('/tmp/agent_responding')
+                except FileNotFoundError:
+                    pass
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)
     finally:
-        await ws.close()
+        for t in infra:
+            t.cancel()
 
 
 if __name__ == '__main__':

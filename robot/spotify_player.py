@@ -23,6 +23,9 @@ import time
 import numpy as np
 
 _RESPONDING_FLAG = '/tmp/agent_responding'
+# Appel d'assistance en cours : on coupe aussi la musique, sinon elle sortirait du
+# haut-parleur du robot et polluerait le micro de la tablette pendant l'appel.
+_AI_PAUSED_FLAG  = '/tmp/ai_paused'
 
 # Format de sortie du pipe librespot
 _SRC_RATE  = 44100
@@ -168,7 +171,8 @@ def _pump_pcm(proc: subprocess.Popen, client) -> None:
         if not data:
             break
 
-        responding = os.path.exists(_RESPONDING_FLAG)
+        # Musique coupée quand le robot parle OU pendant un appel d'assistance.
+        responding = os.path.exists(_RESPONDING_FLAG) or os.path.exists(_AI_PAUSED_FLAG)
         if responding != was_responding:
             if responding:
                 try:

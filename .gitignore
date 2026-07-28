@@ -10,3 +10,13 @@ vision/face_id/photos/
 *.engine
 *.onnx
 SESSION_RESUME.md
+tablet_server/analytics_events.jsonl
+tablet_server/rapport_stats.html
+
+# Fichiers générés au runtime (plans, QR codes, notes, stats, backups)
+tablet_server/static/plans/
+tablet_server/static/qrcodes/
+tablet_server/static/notes/
+tablet_server/statistiques_robot.csv
+backups/
+*.bak

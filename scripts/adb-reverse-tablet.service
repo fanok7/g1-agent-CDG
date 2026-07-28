@@ -1,0 +1,15 @@
+[Unit]
+Description=Maintient le tunnel adb reverse (port 8000) vers la tablette Fully Kiosk
+After=network.target
+
+[Service]
+Type=simple
+User=unitree
+Environment=HOME=/home/unitree
+Environment=ADB_VENDOR_KEYS=/home/unitree/.android/adbkey
+ExecStart=/home/unitree/g1_agent_interim/scripts/adb_reverse_tablet.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

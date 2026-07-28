@@ -13,6 +13,30 @@ Seul le LLM est distant : l'audio du micro part en streaming vers l'**API OpenAI
 └─────────────────────────────┘         └───────────────────────────────────────┘
 ```
 Vidéo de démonstration: [![Demo G1 Agent](https://img.youtube.com/vi/fDE_c2kgEHU/maxresdefault.jpg)](https://www.youtube.com/watch?v=fDE_c2kgEHU)
+
+## Documentation par fonctionnalité
+
+- **[DASHBOARD.md](DASHBOARD.md)** — dashboard de télémétrie Streamlit : lancement,
+  lecture, export Excel. **Mode d'emploi complet.**
+- **[STATISTIQUES.md](STATISTIQUES.md)** — la télémétrie côté données (ce qui est
+  mesuré, anonymat, fichiers de données).
+- **[ASSISTANCE.md](ASSISTANCE.md)** — appel d'assistance humaine (bouton 🆘 + vocal,
+  Daily.co, audio par le robot, écran d'avertissement).
+
+## Dashboard de télémétrie — démarrage rapide
+
+Streamlit est installé sur le robot. On le lance sur le robot, on le consulte depuis
+le PC. **Détails : [DASHBOARD.md](DASHBOARD.md).**
+
+```bash
+# sur le robot (SSH) — headless auto
+cd /home/unitree/g1_agent_interim && bash scripts/lancer_dashboard.sh
+```
+Puis, dans le navigateur du PC : **http://192.168.123.164:8501**
+
+> ⚠️ `dashboard_stats.py` ≠ `dashboard.py` : ce dernier est le **superviseur ESP32**
+> (Flask, port 8888, lancé au boot), à ne pas confondre.
+
 ---
 
 ## Installation

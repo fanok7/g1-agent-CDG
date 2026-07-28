@@ -2,221 +2,388 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>G1 — Tablette virtuelle</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap');
 
   :root {
-    --background: #F5F5F7;
+    /* Palette I-Interim */
+    --bg-1: #F3F0FA;
+    --bg-2: #ECE7F7;
     --white: #FFFFFF;
-    --text-primary: #1F1F27;
-    --text-secondary: #5B5B6A;
+    --text-primary: #1E1B29;
+    --text-secondary: #6B6780;
     --accent: #7B2CBF;
-    --card-border: rgba(123, 44, 191, 0.18);
-    --shadow: 0 30px 65px rgba(123, 44, 191, 0.11);
+    --accent-soft: rgba(123, 44, 191, 0.10);
+    --card-border: rgba(123, 44, 191, 0.14);
+    --shadow-lg: 0 24px 60px rgba(72, 26, 122, 0.14);
+    --shadow-sm: 0 10px 26px rgba(72, 26, 122, 0.08);
+
+    /* Couleurs d'état IA */
+    --state-listen: #7B2CBF;
+    --state-think:  #E08A00;
+    --state-speak:  #17A673;
+
+    /* Échelle d'espacement */
+    --sp-1: 8px;  --sp-2: 12px; --sp-3: 16px;
+    --sp-4: 22px; --sp-5: 32px; --radius: 28px;
+
+    /* Animations — signature commune (durées + courbe) */
+    --t-fast: 160ms; --t-base: 300ms; --t-slow: 450ms;
+    --ease: cubic-bezier(.4, 0, .2, 1);
   }
 
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+  html, body { height: 100%; }
   body {
-    margin: 0; min-height: 100vh; width: 100vw;
-    background: var(--background); color: var(--text-primary);
-    font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif;
-    display: flex; justify-content: center; align-items: center;
-    overflow: hidden;
+    margin: 0; width: 100vw; height: 100vh; overflow: hidden;
+    color: var(--text-primary);
+    background: radial-gradient(120% 120% at 15% 0%, var(--bg-1) 0%, var(--bg-2) 100%);
+    font-family: 'Montserrat', system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
 
   #app {
-    width: 100%; height: 100vh; max-width: 1920px;
-    display: flex; flex-direction: column; padding: 24px 32px;
+    height: 100vh; width: 100%; max-width: 1600px; margin: 0 auto;
+    display: flex; flex-direction: column;
+    padding: clamp(14px, 2.2vh, 24px) clamp(18px, 2.4vw, 34px);
+    gap: clamp(12px, 1.8vh, 20px);
   }
 
-  /* ── Header ── */
+  /* ══ Header ═══════════════════════════════════════════════════════════ */
   #header {
-    width: 100%; display: flex; justify-content: space-between; align-items: center;
-    padding: 20px 40px; background: var(--white); border-radius: 24px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.05); flex-shrink: 0;
+    flex-shrink: 0; display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; gap: var(--sp-3); overflow: hidden;
+    padding: clamp(10px, 1.4vh, 16px) clamp(18px, 2vw, 30px);
+    background: var(--white); border-radius: var(--radius); box-shadow: var(--shadow-sm);
   }
-  #logo { display: flex; align-items: center; gap: 16px; }
+  #logo { display: flex; align-items: center; gap: 14px; justify-self: start; min-width: 0; }
   #logo-mark {
-    min-width: 44px; height: 44px; border-radius: 24px; background: var(--accent);
+    min-width: 46px; height: 46px; border-radius: 16px;
+    background: linear-gradient(135deg, #7B2CBF, #9D4EDD);
     color: var(--white); display: flex; align-items: center; justify-content: center;
-    font-size: 1.2rem; font-weight: 700; letter-spacing: 0.08em;
+    font-size: 1.15rem; font-weight: 800; letter-spacing: 0.06em;
+    box-shadow: 0 8px 18px rgba(123,44,191,.35);
   }
-  #logo-text { font-size: 1.3rem; font-weight: 700; letter-spacing: 0.04em; }
+  #logo-text { font-size: clamp(1.05rem, 2vw, 1.35rem); font-weight: 800; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #header-title {
-    font-weight: 600; font-size: 0.9rem; color: var(--text-secondary);
-    letter-spacing: 0.12em; text-transform: uppercase;
+    justify-self: end; text-align: right; font-weight: 600; min-width: 0; overflow: hidden;
+    font-size: clamp(0.68rem, 1.2vw, 0.85rem); color: var(--text-secondary);
+    letter-spacing: 0.14em; text-transform: uppercase; line-height: 1.3;
   }
-  #accent-line { width: 100%; height: 5px; margin: 18px 0; background: var(--accent); border-radius: 999px; flex-shrink: 0; }
 
-  /* ── Indicateur d'état IA (écoute / réfléchit / parle) ── */
+  /* ── Indicateur d'état IA (au centre, couleur = état) ── */
   #ai-status {
-    display: flex; align-items: center; gap: 10px; padding: 8px 18px;
-    background: var(--background); border-radius: 999px;
+    justify-self: center; display: flex; align-items: center; gap: 12px; min-width: 0;
+    padding: 10px 22px; border-radius: 999px;
+    background: var(--accent-soft);
+    border: 1.5px solid transparent;
+    transition: background .3s ease, border-color .3s ease;
   }
-  #ai-status .ai-icon { position: relative; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+  #ai-status .ai-icon { position: relative; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; }
   #ai-status .wave, #ai-status .gear, #ai-status .mouth { display: none; }
-  #ai-label { font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.04em; }
+  #ai-label { font-size: clamp(0.82rem, 1.5vw, 1rem); font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
 
-  /* écoute : onde sonore (barres qui rebondissent) */
+  /* écoute : onde sonore */
+  #ai-status.status--ecoute { background: rgba(123,44,191,.10); border-color: rgba(123,44,191,.28); }
+  #ai-status.status--ecoute #ai-label { color: var(--state-listen); }
   #ai-status.status--ecoute .wave { display: flex; align-items: center; gap: 3px; height: 100%; }
-  #ai-status .wave span { width: 3px; background: var(--accent); border-radius: 2px; animation: wave-bounce 1s ease-in-out infinite; }
+  #ai-status .wave span { width: 3.5px; background: var(--state-listen); border-radius: 3px; animation: wave-bounce 1s ease-in-out infinite; }
   #ai-status .wave span:nth-child(1) { height: 40%; animation-delay: 0s; }
   #ai-status .wave span:nth-child(2) { height: 100%; animation-delay: .15s; }
   #ai-status .wave span:nth-child(3) { height: 70%; animation-delay: .3s; }
   #ai-status .wave span:nth-child(4) { height: 55%; animation-delay: .45s; }
   @keyframes wave-bounce { 0%, 100% { transform: scaleY(.4); } 50% { transform: scaleY(1); } }
 
-  /* réfléchit : engrenage qui tourne */
+  /* réfléchit : engrenage */
+  #ai-status.status--reflechit { background: rgba(224,138,0,.12); border-color: rgba(224,138,0,.30); }
+  #ai-status.status--reflechit #ai-label { color: var(--state-think); }
   #ai-status.status--reflechit .gear {
-    display: block; font-size: 1.3rem; color: var(--accent);
+    display: block; font-size: 1.35rem; color: var(--state-think);
     animation: gear-spin 1.1s linear infinite;
   }
   @keyframes gear-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-  /* parle : bouche animée (ouverture/fermeture) */
+  /* parle : bouche animée */
+  #ai-status.status--parle { background: rgba(23,166,115,.12); border-color: rgba(23,166,115,.30); }
+  #ai-status.status--parle #ai-label { color: var(--state-speak); }
   #ai-status.status--parle .mouth {
-    display: block; width: 22px; height: 12px; background: var(--accent);
-    border-radius: 0 0 12px 12px; transform-origin: top center;
+    display: block; width: 24px; height: 13px; background: var(--state-speak);
+    border-radius: 0 0 13px 13px; transform-origin: top center;
     animation: mouth-talk .35s ease-in-out infinite;
   }
   @keyframes mouth-talk { 0%, 100% { transform: scaleY(.3); } 50% { transform: scaleY(1); } }
 
-  /* ── Carte principale + panneau de chat ── */
+  /* ══ Zone principale ══════════════════════════════════════════════════ */
   #main {
-    flex: 1; min-height: 0; display: flex; flex-direction: row;
-    align-items: stretch; gap: 24px; padding: 8px;
+    flex: 1; min-height: 0; display: flex; flex-direction: column; gap: clamp(12px, 1.6vh, 18px);
   }
   #main-card {
-    flex: 2; min-width: 0; height: 100%;
+    flex: 1; min-width: 0; min-height: 0;
     background: var(--white); border: 1px solid var(--card-border); border-radius: 34px;
-    box-shadow: var(--shadow); display: flex; align-items: center; justify-content: center;
-    padding: 40px; overflow: hidden;
+    box-shadow: var(--shadow-lg); overflow: hidden; position: relative;
   }
 
-  /* ── Panneau de chat (transcription vocale + discussion) ── */
-  /* Se masque automatiquement dès qu'un contenu (texte/QR/plan) est affiché,
-     pour laisser toute la place au schéma — la conversation n'est utile que
-     quand il n'y a rien d'autre à montrer (idle). */
-  #chat-panel {
-    flex: 0 0 380px; height: 100%; display: flex; flex-direction: column;
-    background: var(--white); border: 1px solid var(--card-border); border-radius: 34px;
-    box-shadow: var(--shadow); overflow: hidden;
+  /* ── Système de vues empilées (cross-fade fluide) ── */
+  .card-view {
+    position: absolute; inset: 0; display: flex; padding: clamp(24px, 4vh, 48px);
+    opacity: 0; transform: translateY(10px); pointer-events: none;
+    transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease);
   }
-  #chat-panel.hidden { display: none; }
-  #chat-header {
-    padding: 20px 24px; font-weight: 700; font-size: 0.95rem; color: var(--text-primary);
-    border-bottom: 1px solid var(--card-border); display: flex; align-items: center;
-    justify-content: space-between; flex-shrink: 0;
-  }
-  /* Bouton flottant pour ré-ouvrir la conversation pendant qu'un contenu est affiché */
-  #chat-reopen-btn {
-    display: none; position: fixed; bottom: 24px; right: 24px; z-index: 10;
-    width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
-    background: var(--accent); color: var(--white); font-size: 1.4rem;
-    box-shadow: 0 14px 30px rgba(123,44,191,.3); align-items: center; justify-content: center;
-  }
-  #chat-reopen-btn.visible { display: flex; }
+  .card-view.is-active { opacity: 1; transform: none; pointer-events: auto; }
 
-  #chat-messages {
-    flex: 1; min-height: 0; overflow-y: auto; padding: 20px; display: flex;
-    flex-direction: column; gap: 12px;
-  }
-  .bubble {
-    max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 0.92rem;
-    line-height: 1.45; word-wrap: break-word; white-space: pre-wrap;
-  }
-  .bubble.assistant {
-    align-self: flex-start; background: var(--background); color: var(--text-primary);
-    border-bottom-left-radius: 4px;
-  }
-  .bubble.user {
-    align-self: flex-end; background: var(--accent); color: var(--white);
-    border-bottom-right-radius: 4px;
-  }
-
-  #chat-empty { padding: 20px; color: var(--text-secondary); font-size: 0.85rem; text-align: center; opacity: .6; }
-
-  /* ── Veille ── */
+  /* ── Veille (accueil) ── */
   #idle {
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    gap: clamp(16px, 2.5vh, 28px); text-align: center;
+  }
+  #idle .halo {
+    position: relative; width: clamp(96px, 15vh, 140px); height: clamp(96px, 15vh, 140px);
     display: flex; align-items: center; justify-content: center;
-    flex-direction: column; gap: 14px; opacity: 0.45;
   }
-  #idle .dot {
-    width: 14px; height: 14px; border-radius: 50%; background: var(--accent);
-    animation: pulse 2s ease-in-out infinite;
+  #idle .halo::before, #idle .halo::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%;
+    border: 2px solid var(--accent); opacity: 0; animation: halo-ring 2.6s ease-out infinite;
   }
-  #idle span { font-weight: 500; letter-spacing: 0.04em; }
+  #idle .halo::after { animation-delay: 1.3s; }
+  @keyframes halo-ring {
+    0% { transform: scale(.55); opacity: .55; }
+    100% { transform: scale(1.25); opacity: 0; }
+  }
+  #idle .halo .core {
+    width: 58%; height: 58%; border-radius: 50%;
+    background: linear-gradient(135deg, #7B2CBF, #9D4EDD);
+    box-shadow: 0 12px 30px rgba(123,44,191,.4);
+    display: flex; align-items: center; justify-content: center;
+    font-size: clamp(2rem, 5vh, 3rem);
+  }
+  #idle .idle-title { font-size: clamp(1.4rem, 3.4vh, 2.1rem); font-weight: 800; margin: 0; }
+  #idle .idle-sub { font-size: clamp(0.95rem, 2vh, 1.15rem); color: var(--text-secondary); margin: 0; font-weight: 500; }
+  /* le point historique reste présent (masqué) pour compat JS */
+  #idle .dot, #idle > span:not(.idle-title):not(.idle-sub) { display: none; }
   @keyframes pulse { 0%,100% { opacity: .3; transform: scale(1); } 50% { opacity: 1; transform: scale(1.3); } }
 
-  /* ── Texte ──
-     Unités relatives au conteneur (main-card) plutôt qu'à l'écran entier
-     (vw/vh/vmin) : main-card partage désormais la largeur avec chat-panel,
-     donc une taille calculée sur 100% de l'écran déborde et casse la mise
-     en page dès que le panneau de chat est présent. */
-  #text-view { display: none; flex-direction: row; gap: 40px; width: 100%; height: 100%; align-items: center; }
-  #text-view .text-body { flex: 1; min-width: 0; max-height: 100%; overflow-y: auto; }
-  #text-view h1 { font-size: 2.2em; margin: 0 0 20px; color: var(--accent); }
+  /* ── Boutons d'action du pied de page (accueil + bascule) ── */
+  .footer-actions { display: flex; gap: 10px; flex-shrink: 0; }
+  .footer-actions button {
+    width: clamp(52px, 8vh, 62px); height: clamp(52px, 8vh, 62px); border-radius: 16px;
+    border: 2px solid var(--card-border); background: var(--white); color: var(--accent);
+    font-size: clamp(1.4rem, 3vh, 1.8rem); cursor: pointer; display: flex;
+    align-items: center; justify-content: center; transition: transform .1s ease;
+  }
+  .footer-actions button:active { transform: scale(.92); }
+  /* Bouton d'assistance : rouge, visuellement distinct (action d'urgence). */
+  .footer-actions button.assist {
+    background: linear-gradient(135deg, #e03131, #c92a2a); color: #fff; border-color: transparent;
+    box-shadow: 0 8px 18px rgba(224,49,49,.32);
+  }
+  .footer-actions button.active {
+    background: linear-gradient(135deg, #7B2CBF, #9D4EDD); color: #fff; border-color: transparent;
+    box-shadow: 0 8px 18px rgba(123,44,191,.32);
+  }
+
+  /* ── Vue conversation (historique complet) ── */
+  #chat-view {
+    flex-direction: column; gap: 12px; width: 100%; height: 100%;
+    overflow-y: auto;
+  }
+  #chat-view .msg { display: flex; gap: 10px; align-items: flex-end; max-width: 82%; animation: choice-in var(--t-fast) var(--ease) both; }
+  #chat-view .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  #chat-view .msg .av {
+    flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; font-size: 1rem;
+    display: flex; align-items: center; justify-content: center; background: var(--accent-soft);
+  }
+  #chat-view .msg.user .av { background: linear-gradient(135deg,#7B2CBF,#9D4EDD); }
+  #chat-view .msg .bubble {
+    padding: 12px 16px; border-radius: 18px; font-size: clamp(0.95rem,2vh,1.15rem);
+    line-height: 1.45; background: var(--bg-1); color: var(--text-primary);
+  }
+  #chat-view .msg.user .bubble { background: var(--accent); color: var(--white); }
+  #chat-view .chat-empty { margin: auto; color: var(--text-secondary); opacity: .6; font-style: italic; }
+
+  /* ── Vue APPEL D'ASSISTANCE (mise en relation humaine) ── */
+  #call-view { flex-direction: column; align-items: center; justify-content: center; gap: clamp(14px, 2.2vh, 24px); text-align: center; }
+  #call-view .call-halo { position: relative; width: clamp(96px, 15vh, 140px); height: clamp(96px, 15vh, 140px); display: flex; align-items: center; justify-content: center; }
+  #call-view .call-halo::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 3px solid var(--state-speak); opacity: 0; animation: halo-ring 1.8s ease-out infinite; }
+  #call-view .call-core {
+    width: 62%; height: 62%; border-radius: 50%; background: linear-gradient(135deg, #17A673, #0f7d56);
+    display: flex; align-items: center; justify-content: center; font-size: clamp(2rem, 5vh, 3rem);
+    box-shadow: 0 12px 30px rgba(23,166,115,.4);
+  }
+  #call-view .call-title { font-size: clamp(1.4rem, 3.4vh, 2.1rem); font-weight: 800; margin: 0; }
+  #call-view .call-sub { font-size: clamp(1rem, 2.2vh, 1.3rem); color: var(--accent); font-weight: 700; margin: 0; }
+  #call-view .call-hint { font-size: clamp(0.9rem, 1.9vh, 1.1rem); color: var(--text-secondary); margin: 0; }
+  #call-hangup {
+    font-family: inherit; font-size: clamp(1.05rem, 2.4vh, 1.35rem); font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, #e03131, #c92a2a); border: none; border-radius: 20px;
+    padding: clamp(14px, 2.4vh, 20px) clamp(28px, 5vw, 48px); cursor: pointer;
+    box-shadow: 0 12px 26px rgba(224,49,49,.32); transition: transform .1s ease;
+  }
+  #call-hangup:active { transform: scale(.96); }
+  /* L'audio Jitsi tourne dans un conteneur quasi invisible (appel audio seul) —
+     on le garde dans le DOM (pas display:none) pour ne pas suspendre le son. */
+  /* Réceptacle des <audio> distants (voix du responsable). Invisible mais avec
+     une vraie taille et jamais display:none — un média retiré du rendu peut être
+     suspendu par le navigateur. On le sort de l'écran. */
+  #call-audio { position: absolute; left: -10000px; top: 0; width: 320px; height: 240px; pointer-events: none; }
+
+  /* ── Menu d'accueil tactile (sur l'écran de veille) ── */
+  #idle .idle-menu { display: flex; gap: clamp(12px, 1.6vw, 20px); flex-wrap: wrap; justify-content: center; margin-top: clamp(8px, 1.5vh, 18px); }
+  #idle .idle-menu button {
+    font-family: inherit; font-size: clamp(0.95rem, 2vh, 1.15rem); font-weight: 700;
+    border: 2px solid var(--card-border); background: var(--white); color: var(--accent);
+    border-radius: 18px; padding: clamp(14px, 2vh, 20px) clamp(20px, 3vw, 32px); cursor: pointer;
+    box-shadow: var(--shadow-sm); transition: transform .1s ease;
+  }
+  #idle .idle-menu button:active { transform: scale(.96); }
+  /* Entrée Assistance du menu : rouge, repérable immédiatement en cas de besoin. */
+  #idle .idle-menu button.assist-menu { color: #c92a2a; border-color: rgba(224,49,49,.35); }
+  #idle .idle-langs { display: flex; gap: 8px; margin-top: clamp(6px, 1.2vh, 14px); flex-wrap: wrap; justify-content: center; max-width: 100%; }
+  #idle .idle-langs button {
+    font-size: clamp(1.4rem, 3vh, 1.9rem); background: transparent; border: 0; cursor: pointer;
+    padding: 6px 8px; border-radius: 12px; opacity: .85; transition: transform .1s ease, opacity .15s;
+  }
+  #idle .idle-langs button:active { transform: scale(1.15); opacity: 1; }
+
+  /* ── Overlay de chargement ── */
+  #loading {
+    position: absolute; inset: 0; z-index: 8;
+    background: rgba(255,255,255,.78); backdrop-filter: blur(3px);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    opacity: 0; pointer-events: none; transition: opacity var(--t-base) var(--ease);
+  }
+  #loading.on { opacity: 1; pointer-events: auto; }
+  #loading .spinner {
+    width: clamp(48px, 8vh, 72px); height: clamp(48px, 8vh, 72px); border-radius: 50%;
+    border: 5px solid var(--accent-soft); border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+  }
+  #loading span { font-size: clamp(1rem, 2.4vh, 1.3rem); font-weight: 600; color: var(--text-secondary); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Texte ── */
+  #text-view { flex-direction: row; gap: clamp(24px, 4vw, 48px); width: 100%; height: 100%; align-items: center; }
+  #text-view .text-body { flex: 1; min-width: 0; max-height: 100%; overflow-y: auto; padding-right: 6px; }
+  #text-view h1 { font-size: clamp(1.6rem, 4.2vh, 2.6rem); margin: 0 0 clamp(12px, 2vh, 22px); color: var(--accent); line-height: 1.15; }
   #text-view pre {
-    font-family: inherit; font-size: 1.3em; line-height: 1.7; color: var(--text-secondary);
-    white-space: pre-wrap; margin: 0;
+    font-family: inherit; font-size: clamp(1.05rem, 2.6vh, 1.5rem); line-height: 1.7; color: var(--text-primary);
+    white-space: pre-wrap; margin: 0; font-weight: 500;
   }
   #text-view .text-qr-block {
-    flex: 0 0 auto; width: 30%; max-width: 220px; box-sizing: border-box;
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 10px; background: var(--background);
-    border-radius: 20px; padding: 24px; border: 1px solid var(--card-border);
+    flex-shrink: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px; background: var(--bg-1);
+    border-radius: 24px; padding: clamp(18px, 3vh, 28px); border: 1px solid var(--card-border);
   }
-  #text-view img#text-qr { width: 100%; height: auto; aspect-ratio: 1 / 1; image-rendering: pixelated; border-radius: 8px; }
-  #text-view .text-qr-caption { font-size: 0.85em; color: var(--text-secondary); text-align: center; }
+  #text-view img#text-qr { width: clamp(120px, 18vmin, 220px); height: clamp(120px, 18vmin, 220px); image-rendering: pixelated; border-radius: 10px; background:#fff; }
+  #text-view .text-qr-caption { font-size: 0.85rem; color: var(--text-secondary); max-width: 20vmin; text-align: center; line-height: 1.4; }
 
   /* ── QR Code générique ── */
-  #qr-view { display: none; align-items: center; justify-content: center; flex-direction: column; gap: 24px; width: 100%; height: 100%; }
-  #qr-view h1 { font-size: 1.8em; margin: 0; color: var(--accent); }
-  #qr-view img {
-    width: 60%; max-width: 420px; height: auto; aspect-ratio: 1 / 1;
-    image-rendering: pixelated; border-radius: 16px;
-  }
+  #qr-view { align-items: center; justify-content: center; flex-direction: column; gap: clamp(18px, 3vh, 30px); }
+  #qr-view h1 { font-size: clamp(1.5rem, 4vh, 2.3rem); margin: 0; color: var(--accent); text-align: center; }
+  #qr-view img { width: clamp(240px, 50vmin, 460px); height: clamp(240px, 50vmin, 460px); image-rendering: pixelated; border-radius: 20px; background:#fff; padding: 12px; box-shadow: var(--shadow-sm); }
 
-  /* ── Plan (carte + QR de récupération) ── */
-  #plan-view { display: none; flex-direction: column; align-items: center; justify-content: center; gap: 20px; width: 100%; height: 100%; }
-  #plan-view h1 { font-size: 1.6em; margin: 0; color: var(--accent); }
-  #plan-view .plan-body { display: flex; gap: 40px; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 0; }
-  #plan-view img#plan-image {
-    flex: 1 1 auto; min-width: 0; max-width: 65%; max-height: 100%;
-    object-fit: contain; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.08);
-  }
+  /* ── Plan (carte + QR) ── */
+  #plan-view { flex-direction: column; align-items: center; justify-content: center; gap: clamp(14px, 2.4vh, 24px); width: 100%; height: 100%; }
+  #plan-view h1 { font-size: clamp(1.3rem, 3.4vh, 2rem); margin: 0; color: var(--accent); text-align: center; }
+  #plan-view .plan-body { display: flex; gap: clamp(24px, 4vw, 48px); align-items: center; justify-content: center; min-height: 0; flex: 1; width: 100%; }
+  #plan-view iframe#plan-map { flex: 1; height: 100%; min-height: 0; border: 0; border-radius: 18px; box-shadow: var(--shadow-sm); background: var(--bg-1); }
+  #plan-view img#plan-image { max-height: 100%; max-width: 60%; border-radius: 18px; box-shadow: var(--shadow-sm); object-fit: contain; }
   #plan-view .plan-qr-block {
-    flex: 0 0 auto; width: 25%; max-width: 200px; box-sizing: border-box;
-    display: flex; flex-direction: column; align-items: center; gap: 10px;
-    background: var(--background); border-radius: 20px; padding: 24px; border: 1px solid var(--card-border);
+    flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 12px;
+    background: var(--bg-1); border-radius: 24px; padding: clamp(18px, 3vh, 28px); border: 1px solid var(--card-border);
   }
-  #plan-view img#plan-qr { width: 100%; height: auto; aspect-ratio: 1 / 1; image-rendering: pixelated; border-radius: 8px; }
-  #plan-view .plan-caption { font-size: 0.9em; color: var(--text-secondary); text-align: center; }
+  #plan-view img#plan-qr { width: clamp(130px, 18vmin, 220px); height: clamp(130px, 18vmin, 220px); image-rendering: pixelated; border-radius: 10px; background:#fff; }
+  #plan-view .plan-caption { font-size: 0.9rem; color: var(--text-secondary); max-width: 22vmin; text-align: center; line-height: 1.4; }
 
-  /* ── Boutons tactiles dynamiques (adaptés à la question posée) ── */
-  #choice-buttons {
-    display: none; gap: 20px; justify-content: center; flex-wrap: wrap;
-    padding: 18px 0 4px; flex-shrink: 0;
-  }
+  /* ── Boutons tactiles dynamiques ── */
+  #choice-buttons { display: none; gap: clamp(14px, 2vw, 22px); justify-content: center; flex-wrap: wrap; flex-shrink: 0; }
   #choice-buttons button {
-    font-family: inherit; font-size: 1.25rem; font-weight: 700; letter-spacing: 0.04em;
-    border: none; border-radius: 20px; padding: 20px 44px; cursor: pointer;
-    background: var(--accent); color: var(--white); box-shadow: 0 14px 30px rgba(123,44,191,.28);
+    font-family: inherit; font-size: clamp(1.05rem, 2.4vh, 1.35rem); font-weight: 700; letter-spacing: 0.02em;
+    border: none; border-radius: 22px; padding: clamp(16px, 2.6vh, 24px) clamp(30px, 5vw, 52px); cursor: pointer;
+    background: linear-gradient(135deg, #7B2CBF, #9D4EDD); color: var(--white);
+    box-shadow: 0 14px 30px rgba(123,44,191,.30); min-width: 150px;
     transition: transform .1s ease, box-shadow .1s ease;
+    animation: choice-in var(--t-base) var(--ease) both;   /* entrée slide-up + fondu */
   }
-  #choice-buttons button:active { transform: scale(0.96); }
-  /* Le dernier bouton d'une paire oui/non (ou le 2e de 2 options) reste
-     visuellement secondaire — évite que tous les boutons crient "action
-     principale" quand il y en a plusieurs. */
+  @keyframes choice-in { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: none; } }
+  #choice-buttons button:active { transform: scale(0.95); box-shadow: 0 6px 16px rgba(123,44,191,.28); }
   #choice-buttons button.secondary {
-    background: var(--white); color: var(--text-secondary); border: 2px solid var(--card-border);
-    box-shadow: none;
+    background: var(--white); color: var(--text-secondary); border: 2px solid var(--card-border); box-shadow: none;
   }
 
-  #status { position: fixed; bottom: 10px; right: 16px; font-size: 0.75em; color: var(--text-secondary); opacity: 0.5; }
+  /* ── Barre du bas : avis (gauche) + actions (droite) ── */
+  #rating-footer {
+    flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; row-gap: 8px; flex-wrap: wrap;   /* passe à la ligne si trop étroit → jamais hors écran */
+    padding: clamp(10px, 1.6vh, 16px) clamp(18px, 2.4vw, 30px);
+    background: var(--white); border: 1px solid var(--card-border);
+    border-radius: 22px; box-shadow: var(--shadow-sm);
+  }
+  #rating-footer .rating-block { display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
+  #rating-footer .label { font-size: clamp(0.85rem, 1.8vh, 1.05rem); color: var(--text-secondary); font-weight: 700; }
+  #rating-footer .stars { display: flex; gap: 5px; flex-direction: row-reverse; }
+  #rating-footer .stars span {
+    font-size: clamp(1.8rem, 4vh, 2.4rem); color: var(--card-border); cursor: pointer; line-height: 1;
+    transition: color .15s ease, transform .1s ease; padding: 2px;
+  }
+  #rating-footer .stars span:hover, #rating-footer .stars span:hover ~ span,
+  #rating-footer .stars span:active, #rating-footer .stars span:active ~ span {
+    color: #FFC107; transform: scale(1.18);
+  }
+  #rating-merci { display: none; color: var(--state-speak); font-weight: 700; font-size: 1rem; white-space: nowrap; }
+
+  #status { position: fixed; bottom: 8px; right: 14px; font-size: 0.7rem; color: var(--text-secondary); opacity: 0.4; }
+
+  /* ── Toast de confirmation (feedback discret) ── */
+  #toast {
+    position: fixed; left: 50%; bottom: 40px; transform: translate(-50%, 20px);
+    background: var(--text-primary); color: #fff; font-weight: 600; font-size: 1rem;
+    padding: 14px 26px; border-radius: 999px; box-shadow: 0 12px 30px rgba(0,0,0,.22);
+    opacity: 0; pointer-events: none; z-index: 20;
+    transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease);
+  }
+  #toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ══ Confirmation d'assistance (avertissement avant l'appel) ═══════════ */
+  #assist-confirm {
+    position: fixed; inset: 0; z-index: 30;
+    display: flex; align-items: center; justify-content: center;
+    padding: clamp(20px, 4vw, 48px);
+    background: rgba(30, 27, 41, .55); backdrop-filter: blur(5px);
+    opacity: 0; pointer-events: none; transition: opacity var(--t-base) var(--ease);
+  }
+  #assist-confirm.on { opacity: 1; pointer-events: auto; }
+  #assist-confirm .box {
+    background: var(--white); border-radius: 30px; box-shadow: var(--shadow-lg);
+    max-width: 640px; width: 100%; padding: clamp(28px, 4vh, 44px);
+    text-align: center; transform: translateY(14px) scale(.98);
+    transition: transform var(--t-base) var(--ease);
+  }
+  #assist-confirm.on .box { transform: none; }
+  #assist-confirm .ac-icon {
+    width: clamp(64px, 10vh, 88px); height: clamp(64px, 10vh, 88px); margin: 0 auto var(--sp-3);
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: clamp(2rem, 5vh, 2.8rem);
+    background: rgba(224,49,49,.10); border: 2px solid rgba(224,49,49,.30);
+  }
+  #assist-confirm .ac-title { font-size: clamp(1.3rem, 3.2vh, 1.9rem); font-weight: 800; margin: 0 0 var(--sp-2); color: #c92a2a; }
+  #assist-confirm .ac-text { font-size: clamp(1rem, 2.2vh, 1.2rem); line-height: 1.55; color: var(--text-secondary); margin: 0 0 var(--sp-4); font-weight: 500; }
+  #assist-confirm .ac-actions { display: flex; gap: var(--sp-2); justify-content: center; flex-wrap: wrap; }
+  #assist-confirm button {
+    font-family: inherit; font-weight: 700; font-size: clamp(1rem, 2.2vh, 1.2rem);
+    padding: 16px 32px; border-radius: 999px; border: none; cursor: pointer;
+    transition: transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+  }
+  #assist-confirm button:active { transform: scale(.96); }
+  #assist-confirm .ac-cancel { background: var(--accent-soft); color: var(--text-primary); }
+  #assist-confirm .ac-go { background: #e03131; color: #fff; box-shadow: 0 10px 26px rgba(224,49,49,.36); }
+
+  /* Respecte la préférence "réduire les animations" (accessibilité) */
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
 </style>
 </head>
 <body>
@@ -237,15 +404,31 @@
       <div id="header-title">Robot d'assistance</div>
     </header>
 
-    <div id="accent-line"></div>
-
     <main id="main">
       <div id="main-card">
-        <div id="idle">
+        <div id="chat-view" class="card-view"></div>
+        <div id="call-view" class="card-view">
+          <div class="call-halo"><div class="call-core">📞</div></div>
+          <p class="call-title">Appel en cours…</p>
+          <p class="call-sub" id="call-motif"></p>
+          <p class="call-hint">Un responsable vous répond — parlez normalement.</p>
+          <button id="call-hangup" type="button">✖ Raccrocher</button>
+          <div id="call-audio"></div>
+        </div>
+        <div id="idle" class="card-view is-active">
+          <div class="halo"><div class="core">🤖</div></div>
+          <p class="idle-title">Bonjour&nbsp;! Je vous écoute</p>
+          <p class="idle-sub">Posez-moi votre question à voix haute</p>
+          <div class="idle-menu" id="idle-menu"></div>
+          <div class="idle-langs" id="idle-langs"></div>
           <div class="dot"></div>
           <span>En veille</span>
         </div>
-        <div id="text-view">
+        <div id="loading">
+          <div class="spinner"></div>
+          <span id="loading-text">Un instant…</span>
+        </div>
+        <div id="text-view" class="card-view">
           <div class="text-body">
             <h1 id="text-titre"></h1>
             <pre id="text-contenu"></pre>
@@ -255,13 +438,14 @@
             <div class="text-qr-caption" id="text-qr-caption"></div>
           </div>
         </div>
-        <div id="qr-view">
+        <div id="qr-view" class="card-view">
           <h1 id="qr-titre"></h1>
           <img id="qr-image" alt="QR code">
         </div>
-        <div id="plan-view">
+        <div id="plan-view" class="card-view">
           <h1 id="plan-titre"></h1>
           <div class="plan-body">
+            <iframe id="plan-map" title="Carte interactive" allowfullscreen loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
             <img id="plan-image" alt="Carte itinéraire">
             <div class="plan-qr-block">
               <img id="plan-qr" alt="QR code de récupération">
@@ -271,61 +455,509 @@
         </div>
       </div>
 
-      <div id="chat-panel">
-        <div id="chat-header">
-          <span>Conversation</span>
+      <div id="choice-buttons"></div>
+
+      <div id="rating-footer">
+        <div class="rating-block">
+          <span class="label">Votre avis&nbsp;:</span>
+          <div class="stars" id="stars-container">
+            <span data-score="5">★</span><span data-score="4">★</span><span data-score="3">★</span><span data-score="2">★</span><span data-score="1">★</span>
+          </div>
+          <div id="rating-merci">Merci ! ✔️</div>
         </div>
-        <div id="chat-messages">
-          <div id="chat-empty">La conversation apparaîtra ici.</div>
+        <div class="footer-actions">
+          <button id="assist-btn" type="button" title="Assistance" class="assist">🆘</button>
+          <button id="home-btn" type="button" title="Menu">🏠</button>
+          <button id="view-info" type="button" title="Affichage">🖥️</button>
+          <button id="view-chat" type="button" title="Discussion">💬</button>
         </div>
       </div>
     </main>
-
-    <div id="choice-buttons"></div>
   </div>
-  <button id="chat-reopen-btn" type="button" title="Revoir la conversation">💬</button>
   <div id="status">déconnecté</div>
+  <div id="toast"></div>
+
+  <!-- Avertissement avant de lancer un appel d'assistance : évite les
+       déclenchements par erreur et explique à quoi sert le bouton. -->
+  <div id="assist-confirm">
+    <div class="box">
+      <div class="ac-icon">🆘</div>
+      <p class="ac-title" id="ac-title"></p>
+      <p class="ac-text" id="ac-text"></p>
+      <div class="ac-actions">
+        <button type="button" class="ac-cancel" id="ac-cancel"></button>
+        <button type="button" class="ac-go" id="ac-go"></button>
+      </div>
+    </div>
+  </div>
 
 <script>
 const idleEl    = document.getElementById('idle');
 const textView  = document.getElementById('text-view');
 const qrView    = document.getElementById('qr-view');
 const planView  = document.getElementById('plan-view');
+const chatView  = document.getElementById('chat-view');
+const callView  = document.getElementById('call-view');
 const statusEl  = document.getElementById('status');
 const aiStatusEl = document.getElementById('ai-status');
 const aiLabelEl  = document.getElementById('ai-label');
 const choiceButtonsEl = document.getElementById('choice-buttons');
-const chatPanelEl     = document.getElementById('chat-panel');
-const chatMessagesEl  = document.getElementById('chat-messages');
-const chatEmptyEl     = document.getElementById('chat-empty');
-const chatReopenBtnEl = document.getElementById('chat-reopen-btn');
 
-// Le panneau de conversation se masque automatiquement dès qu'un contenu
-// (texte/QR/plan) est affiché, pour lui laisser toute la place — repasse en
-// idle = la conversation reprend sa place. Un bouton flottant permet de la
-// rouvrir manuellement sans attendre le retour à l'idle.
-function setChatPanelVisible(visible) {
-  chatPanelEl.classList.toggle('hidden', !visible);
-  chatReopenBtnEl.classList.toggle('visible', !visible);
+// ── Internationalisation de l'interface ──────────────────────────────────
+// Le robot pousse la langue détectée ({"lang":"en"}) ; l'écran bascule tous
+// ses textes. Repli anglais pour une langue non listée, français par défaut.
+const I18N = {
+  fr: { ecoute:'Écoute...', reflechit:'Réfléchit...', parle:'Parle...',
+        headerTitle:"Robot d'assistance", idleTitle:'Bonjour ! Je vous écoute',
+        idleSub:'Posez-moi votre question à voix haute',
+        captionEmpty:'La conversation apparaîtra ici.', ratingLabel:'Votre avis :',
+        merci:'Merci ! ✔️', qrText:'Scannez pour enregistrer cette liste dans vos notes',
+        qrPlan:"Scannez pour ouvrir l'itinéraire dans Google Maps sur votre téléphone" },
+  en: { ecoute:'Listening...', reflechit:'Thinking...', parle:'Speaking...',
+        headerTitle:'Assistant robot', idleTitle:"Hello! I'm listening",
+        idleSub:'Ask me your question out loud',
+        captionEmpty:'The conversation will appear here.', ratingLabel:'Your feedback:',
+        merci:'Thank you! ✔️', qrText:'Scan to save this list to your notes',
+        qrPlan:'Scan to open the route in Google Maps on your phone' },
+  es: { ecoute:'Escuchando...', reflechit:'Pensando...', parle:'Hablando...',
+        headerTitle:'Robot asistente', idleTitle:'¡Hola! Le escucho',
+        idleSub:'Hágame su pregunta en voz alta',
+        captionEmpty:'La conversación aparecerá aquí.', ratingLabel:'Su opinión:',
+        merci:'¡Gracias! ✔️', qrText:'Escanee para guardar esta lista en sus notas',
+        qrPlan:'Escanee para abrir la ruta en Google Maps en su teléfono' },
+  de: { ecoute:'Höre zu...', reflechit:'Denke nach...', parle:'Spreche...',
+        headerTitle:'Assistenzroboter', idleTitle:'Hallo! Ich höre zu',
+        idleSub:'Stellen Sie Ihre Frage laut',
+        captionEmpty:'Das Gespräch erscheint hier.', ratingLabel:'Ihre Meinung:',
+        merci:'Danke! ✔️', qrText:'Scannen, um diese Liste in Ihren Notizen zu speichern',
+        qrPlan:'Scannen, um die Route in Google Maps auf Ihrem Handy zu öffnen' },
+  it: { ecoute:'In ascolto...', reflechit:'Sto pensando...', parle:'Sto parlando...',
+        headerTitle:'Robot assistente', idleTitle:'Ciao! Ti ascolto',
+        idleSub:'Fammi la tua domanda ad alta voce',
+        captionEmpty:'La conversazione apparirà qui.', ratingLabel:'La tua opinione:',
+        merci:'Grazie! ✔️', qrText:'Scansiona per salvare questa lista nelle tue note',
+        qrPlan:'Scansiona per aprire il percorso in Google Maps sul telefono' },
+  ar: { ecoute:'أستمع...', reflechit:'أفكر...', parle:'أتحدث...',
+        headerTitle:'روبوت مساعد', idleTitle:'مرحبا! أنا أستمع',
+        idleSub:'اطرح سؤالك بصوت عالٍ',
+        captionEmpty:'ستظهر المحادثة هنا.', ratingLabel:'رأيك:',
+        merci:'شكرا! ✔️', qrText:'امسح لحفظ هذه القائمة في ملاحظاتك',
+        qrPlan:'امسح لفتح المسار في خرائط جوجل على هاتفك' },
+  zh: { ecoute:'正在聆听...', reflechit:'思考中...', parle:'正在说话...',
+        headerTitle:'助理机器人', idleTitle:'您好！我在听',
+        idleSub:'请大声说出您的问题',
+        captionEmpty:'对话将显示在这里。', ratingLabel:'您的评价：',
+        merci:'谢谢！✔️', qrText:'扫描将此列表保存到您的备忘录',
+        qrPlan:'扫描以在手机的谷歌地图中打开路线' },
+  ja: { ecoute:'聞いています...', reflechit:'考えています...', parle:'話しています...',
+        headerTitle:'アシスタントロボット', idleTitle:'こんにちは！お聞きします',
+        idleSub:'質問を声に出してください',
+        captionEmpty:'会話がここに表示されます。', ratingLabel:'ご評価：',
+        merci:'ありがとうございます！✔️', qrText:'このリストをメモに保存するにはスキャン',
+        qrPlan:'スマホのGoogleマップでルートを開くにはスキャン' },
+};
+let currentLang = 'fr';
+let currentStatus = 'ecoute';
+let currentContent = { type: 'idle' };  // dernier contenu poussé par le robot (carte/liste/QR…)
+let viewMode = 'menu';                   // 'menu' (accueil) | 'info' (affichage) | 'chat' (discussion)
+function t(key) {
+  return (I18N[currentLang] && I18N[currentLang][key]) || I18N.en[key] || I18N.fr[key];
 }
-chatReopenBtnEl.addEventListener('click', () => setChatPanelVisible(true));
+function applyLang() {
+  document.getElementById('header-title').textContent = t('headerTitle');
+  const el = (s) => document.querySelector(s);
+  if (el('.idle-title')) el('.idle-title').textContent = t('idleTitle');
+  if (el('.idle-sub'))   el('.idle-sub').textContent   = t('idleSub');
+  if (el('#rating-footer .label')) el('#rating-footer .label').textContent = t('ratingLabel');
+  if (el('#rating-merci')) el('#rating-merci').textContent = t('merci');
+  if (el('.plan-caption')) el('.plan-caption').textContent = t('qrPlan');
+  const lt = document.getElementById('loading-text'); if (lt) lt.textContent = t('loading');
+  document.documentElement.lang = currentLang;
+  document.body.dir = (currentLang === 'ar') ? 'rtl' : 'ltr';
+  buildIdleMenu();                   // relabelle le menu d'accueil dans la langue
+  setAiStatus(currentStatus);        // rafraîchit le libellé d'état
+  applyView();                       // rafraîchit la vue courante (légendes dynamiques…)
+}
+function setLang(code) {
+  code = (code || 'fr').toLowerCase().slice(0, 2);
+  if (!I18N[code]) code = 'en';      // repli anglais si langue non traduite
+  if (code === currentLang) return;
+  currentLang = code;
+  applyLang();
+}
 
-const AI_LABELS = { ecoute: 'Écoute...', reflechit: 'Réfléchit...', parle: 'Parle...' };
+// Libellés du menu d'accueil + texte de chargement (complète chaque langue).
+Object.assign(I18N.fr, { menuHotel:'Hôtels', menuRoute:'Itinéraire', menuInfo:'Informations', menuAssist:'Assistance', loading:'Un instant…' });
+Object.assign(I18N.en, { menuHotel:'Hotels', menuRoute:'Directions', menuInfo:'Information', menuAssist:'Help', loading:'One moment…' });
+Object.assign(I18N.es, { menuHotel:'Hoteles', menuRoute:'Ruta', menuInfo:'Información', menuAssist:'Asistencia', loading:'Un momento…' });
+Object.assign(I18N.de, { menuHotel:'Hotels', menuRoute:'Route', menuInfo:'Information', menuAssist:'Hilfe', loading:'Einen Moment…' });
+Object.assign(I18N.it, { menuHotel:'Hotel', menuRoute:'Percorso', menuInfo:'Informazioni', menuAssist:'Assistenza', loading:'Un attimo…' });
+Object.assign(I18N.ar, { menuHotel:'فنادق', menuRoute:'مسار', menuInfo:'معلومات', menuAssist:'مساعدة', loading:'لحظة…' });
+Object.assign(I18N.zh, { menuHotel:'酒店', menuRoute:'路线', menuInfo:'信息', menuAssist:'协助', loading:'请稍候…' });
+Object.assign(I18N.ja, { menuHotel:'ホテル', menuRoute:'ルート', menuInfo:'情報', menuAssist:'サポート', loading:'お待ちください…' });
 
-// ── Bulles de conversation ──────────────────────────────────────────────
+// Écran d'avertissement du bouton d'assistance (acTitle / acText / acGo / acCancel).
+Object.assign(I18N.fr, { acTitle:'Appeler un responsable ?', acText:"Ce bouton met en relation avec un agent humain de l'aéroport pour une aide réelle : mobilité réduite, fauteuil roulant, urgence. Ne l'utilisez qu'en cas de besoin. Un responsable va vous répondre en direct.", acGo:'Oui, appeler', acCancel:'Annuler' });
+Object.assign(I18N.en, { acTitle:'Call a staff member?', acText:'This button connects you to a human airport agent for real help: reduced mobility, wheelchair, emergency. Use it only if you truly need it. A staff member will answer you live.', acGo:'Yes, call', acCancel:'Cancel' });
+Object.assign(I18N.es, { acTitle:'¿Llamar a un responsable?', acText:'Este botón le pone en contacto con un agente del aeropuerto para una ayuda real: movilidad reducida, silla de ruedas, emergencia. Úselo solo si lo necesita. Un responsable le atenderá en directo.', acGo:'Sí, llamar', acCancel:'Cancelar' });
+Object.assign(I18N.de, { acTitle:'Mitarbeiter rufen?', acText:'Diese Taste verbindet Sie mit einem Flughafenmitarbeiter für echte Hilfe: eingeschränkte Mobilität, Rollstuhl, Notfall. Nutzen Sie sie nur im Bedarfsfall. Ein Mitarbeiter antwortet Ihnen live.', acGo:'Ja, anrufen', acCancel:'Abbrechen' });
+Object.assign(I18N.it, { acTitle:'Chiamare un responsabile?', acText:"Questo pulsante ti mette in contatto con un agente dell'aeroporto per un aiuto reale: mobilità ridotta, sedia a rotelle, emergenza. Usalo solo se necessario. Un responsabile ti risponderà dal vivo.", acGo:'Sì, chiama', acCancel:'Annulla' });
+Object.assign(I18N.ar, { acTitle:'الاتصال بموظف؟', acText:'يوصلك هذا الزر بموظف بشري في المطار للحصول على مساعدة حقيقية: الحركة المحدودة، كرسي متحرك، حالة طارئة. استخدمه فقط عند الحاجة. سيرد عليك موظف مباشرة.', acGo:'نعم، اتصل', acCancel:'إلغاء' });
+Object.assign(I18N.zh, { acTitle:'呼叫工作人员？', acText:'此按钮将您与机场的人工客服连接，以获得真正的帮助：行动不便、轮椅、紧急情况。请仅在确实需要时使用。工作人员将实时回复您。', acGo:'是的，呼叫', acCancel:'取消' });
+Object.assign(I18N.ja, { acTitle:'係員を呼びますか？', acText:'このボタンは、移動が困難な方、車椅子、緊急時など、本当に助けが必要な場合に空港の係員につなぎます。必要な場合のみご利用ください。係員がその場で対応します。', acGo:'はい、呼ぶ', acCancel:'キャンセル' });
+
+// Menu d'accueil : [clé i18n, icône, phrase injectée au robot comme si dite à l'oral]
+const IDLE_MENU = [
+  ['menuHotel', '🏨', 'Je cherche un hôtel'],
+  ['menuRoute', '🗺️', 'Je voudrais un itinéraire'],
+  ['menuInfo',  'ℹ️', "J'aimerais une information"],
+  ['menuAssist','🆘', null],   // null = déclenche l'assistance EN DIRECT (pas via l'IA)
+];
+const IDLE_LANGS = [
+  ['🇫🇷', 'fr', 'Parlez-moi en français'],
+  ['🇬🇧', 'en', 'Please speak English'],
+  ['🇪🇸', 'es', 'Háblame en español'],
+  ['🇩🇪', 'de', 'Sprich bitte Deutsch'],
+  ['🇮🇹', 'it', 'Parla italiano per favore'],
+  ['🇨🇳', 'zh', '请说中文'],
+  ['🇯🇵', 'ja', '日本語で話してください'],
+];
+function buildIdleMenu() {
+  const menu = document.getElementById('idle-menu');
+  const langs = document.getElementById('idle-langs');
+  if (menu) {
+    menu.innerHTML = '';
+    IDLE_MENU.forEach(([key, icon, phrase]) => {
+      const b = document.createElement('button');
+      b.textContent = icon + '  ' + t(key);
+      if (phrase === null) {          // entrée Assistance → appel humain direct
+        b.classList.add('assist-menu');
+        b.addEventListener('click', startAssistance);
+      } else {
+        b.addEventListener('click', () => sendResponse(phrase));  // tap = demande vocale
+      }
+      menu.appendChild(b);
+    });
+  }
+  if (langs) {
+    langs.innerHTML = '';
+    IDLE_LANGS.forEach(([flag, code, phrase]) => {
+      const b = document.createElement('button');
+      b.textContent = flag; b.title = code;
+      b.addEventListener('click', () => { setLang(code); sendResponse(phrase); });
+      langs.appendChild(b);
+    });
+  }
+}
+
+// Retour automatique en veille après inactivité (écran propre pour le suivant).
+let idleTimer = null;
+const IDLE_MS = 90000;   // 90 s sans aucun événement -> retour à l'accueil
+function resetIdleTimer() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(fullReset, IDLE_MS);
+}
+
+// Nouvelle session : après 90 s SANS aucune interaction (ni voix ni tap), on
+// efface tout pour le visiteur suivant (confidentialité + écran propre).
+function fullReset() {
+  if (viewMode === 'call') return;   // appel humain en cours → on ne réinitialise pas
+  fermerConfirmation();              // referme l'avertissement resté ouvert (visiteur parti)
+  currentContent = { type: 'idle' };
+  setChoices([]);
+  document.getElementById('chat-view').innerHTML = '';   // efface la conversation
+  lastUserMessage = 'Aucune question';
+  lastRobotMessage = 'Aucune réponse';
+  setLang('fr');            // langue remise par défaut
+  setViewMode('menu');      // retour à l'accueil
+  fetch('/reset', { method: 'POST' }).catch(() => {});   // efface aussi côté serveur
+}
+
+// Toast de confirmation discret (feedback des actions tactiles).
+let _toastTimer = null;
+let _loadingTimer = null;   // garde-fou anti-blocage de l'overlay "Réflexion"
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('on');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('on'), 1900);
+}
+
+// ── Bandeau sous-titre ───────────────────────────────────────────────────
+// Remplace l'ancien historique complet par le seul dernier échange, toujours
+// visible (le contenu principal n'a plus besoin de lui céder la place).
+// Un court fondu marque le changement de texte sans à-coup de mise en page.
+let lastUserMessage = "Aucune question";
+let lastRobotMessage = "Aucune réponse";
+
 function appendBubble(role, text) {
-  if (chatEmptyEl) chatEmptyEl.remove();
-  const div = document.createElement('div');
-  div.className = 'bubble ' + role;
-  div.textContent = text;
-  chatMessagesEl.appendChild(div);
-  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-  return div;
+  if (role === 'user') lastUserMessage = text;
+  if (role === 'assistant') lastRobotMessage = text;
+  addChatMessage(role, text);   // alimente la vue conversation (accessible via 💬)
 }
+
+// ── Vue conversation (historique complet) + bascule ──────────────────────
+function addChatMessage(role, text) {
+  const cv = document.getElementById('chat-view');
+  const empty = cv.querySelector('.chat-empty'); if (empty) empty.remove();
+  const m = document.createElement('div');
+  m.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+  const av = document.createElement('div'); av.className = 'av';
+  av.textContent = role === 'user' ? '🧑' : '🤖';
+  const b = document.createElement('div'); b.className = 'bubble'; b.textContent = text;
+  m.appendChild(av); m.appendChild(b);
+  cv.appendChild(m);
+  if (viewMode === 'chat') cv.scrollTop = cv.scrollHeight;
+}
+
+// Sélecteur à 3 états : Menu (accueil), Affichage (contenu robot), Discussion.
+function setViewMode(mode) {
+  viewMode = mode;
+  applyView();
+}
+
+function applyView() {
+  document.getElementById('home-btn').classList.toggle('active', viewMode === 'menu');
+  document.getElementById('view-info').classList.toggle('active', viewMode === 'info');
+  document.getElementById('view-chat').classList.toggle('active', viewMode === 'chat');
+  if (viewMode === 'call') {
+    showView(callView);                      // appel humain : prioritaire sur tout
+  } else if (viewMode === 'chat') {
+    showView(chatView);
+    chatView.scrollTop = chatView.scrollHeight;
+  } else if (viewMode === 'info') {
+    renderContent(currentContent);          // le dernier contenu (carte/liste/QR…)
+  } else {
+    renderContent({ type: 'idle' });         // menu = écran d'accueil
+  }
+}
+
+// Menu = accueil (n'efface PAS le contenu : Affichage le retrouve).
+document.getElementById('home-btn').addEventListener('click', () => { setViewMode('menu'); setChoices([]); });
+document.getElementById('view-info').addEventListener('click', () => setViewMode('info'));
+document.getElementById('view-chat').addEventListener('click', () => setViewMode('chat'));
+
+// ── Appel d'assistance : mise en relation vocale avec un responsable ──────
+// La tablette rejoint un salon Jitsi en AUDIO seul (conteneur invisible) ; le son
+// sort par ses haut-parleurs. Pendant ce temps l'IA est en sourdine côté robot.
+let callObj = null;            // objet d'appel Daily (mode callObject, sans iframe)
+let raccrochageEnCours = false;  // anti-double-raccrochage (voir closeCall)
+
+// Remonte au robot ce qui se passe dans le navigateur (kiosque = pas de console).
+function clog(msg) {
+  console.log('[APPEL]', msg);
+  fetch('/clientlog', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ msg: '' + msg }),
+  }).catch(() => {});
+}
+
+function loadDaily(cb) {
+  if (window.DailyIframe) return cb();
+  const s = document.createElement('script');
+  s.src = 'https://unpkg.com/@daily-co/daily-js';
+  s.onload = cb;
+  s.onerror = () => clog('ERREUR: daily-js injoignable (pas d internet ?)');
+  document.head.appendChild(s);
+}
+
+// Sonde micro : si la WebView refuse getUserMedia, l'appel est muet et on ne le
+// saurait pas autrement. On teste AVANT l'appel pour nommer la panne précisément.
+function probeMic() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    clog('ERREUR: getUserMedia indisponible (contexte non sécurisé ?)');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then((st) => {
+      clog('MICRO OK (' + st.getAudioTracks().length + ' piste)');
+      st.getTracks().forEach((t) => t.stop());   // libère avant que Jitsi le reprenne
+    })
+    .catch((e) => clog('ERREUR MICRO: ' + e.name + ' — ' + e.message));
+}
+
+// En mode callObject, daily-js ne fabrique AUCUNE interface : il ne joue donc pas
+// tout seul la voix des autres participants. C'est à nous de brancher chaque piste
+// audio distante sur un <audio> — sans ça l'appel se connecte mais reste muet.
+function attacherAudio(ev) {
+  if (!ev || !ev.track || ev.track.kind !== 'audio') return;
+  if (ev.participant && ev.participant.local) return;   // pas notre propre micro (larsen)
+  const el = document.createElement('audio');
+  el.autoplay = true;
+  el.playsInline = true;
+  el.dataset.sid = ev.participant ? ev.participant.session_id : '';
+  el.srcObject = new MediaStream([ev.track]);
+  document.getElementById('call-audio').appendChild(el);
+  el.play().catch((e) => clog('lecture audio refusée: ' + e.name));
+  clog('voix du responsable branchée');
+}
+
+function detacherAudio(ev) {
+  const sid = ev && ev.participant ? ev.participant.session_id : null;
+  const holder = document.getElementById('call-audio');
+  holder.querySelectorAll('audio').forEach((el) => {
+    if (!sid || el.dataset.sid === sid) { el.srcObject = null; el.remove(); }
+  });
+}
+
+function startCall(info) {
+  document.getElementById('assist-confirm').classList.remove('on');   // l'appel démarre → plus d'avertissement
+  document.getElementById('call-motif').textContent = info.motif || '';
+  setChoices([]);
+  setViewMode('call');
+  clog('Ouverture appel, salon=' + info.room);
+  probeMic();
+
+  // audio='robot' : le Jetson a déjà rejoint le salon avec le micro et le
+  // haut-parleur du robot. La tablette ne doit SURTOUT pas rejoindre aussi —
+  // deux participants dans la même pièce = larsen immédiat. Elle se contente
+  // d'afficher l'écran d'appel et le bouton Raccrocher.
+  if (info.audio === 'robot') { clog('audio par le ROBOT — la tablette n en fait pas partie'); return; }
+
+  if (!info.url) { clog('ERREUR: aucune URL de salon (DAILY_API_KEY manquante ?)'); return; }
+
+  loadDaily(() => {
+    document.getElementById('call-audio').innerHTML = '';
+    try {
+      // callObject = AUCUNE iframe. C'est ce qui débloque tout : les serveurs
+      // Jitsi gratuits refusaient l'intégration en iframe (X-Frame-Options).
+      callObj = window.DailyIframe.createCallObject({
+        audioSource: true,     // micro de la tablette
+        videoSource: false,    // pas de caméra du tout
+      });
+
+      callObj.on('joined-meeting', () => clog('SALON REJOINT ✓'));
+      callObj.on('participant-joined', (e) =>
+        clog('participant arrivé: ' + (e && e.participant && e.participant.user_name)));
+      callObj.on('track-started', attacherAudio);
+      callObj.on('track-stopped', detacherAudio);
+      // Le responsable raccroche de son côté → le visiteur ne doit pas rester
+      // seul dans un salon vide en attendant le watchdog : on ferme aussi ici.
+      callObj.on('participant-left', (e) => {
+        detacherAudio(e);
+        const p = callObj ? callObj.participants() : {};
+        const distants = Object.keys(p).filter((k) => k !== 'local').length;
+        clog('participant parti — reste ' + distants + ' interlocuteur(s)');
+        if (distants === 0) { clog('le responsable a raccroché → fin d appel'); closeCall(true); }
+      });
+      callObj.on('error', (e) => clog('ERREUR DAILY: ' + JSON.stringify(e)));
+      // Le responsable raccroche / la session se ferme → on réveille l'IA
+      callObj.on('left-meeting', () => closeCall(true));
+
+      callObj.join({ url: info.url, userName: 'Robot G1', startVideoOff: true })
+        .catch((e) => clog('ERREUR join: ' + e));
+    } catch (e) {
+      clog('ERREUR instanciation Daily: ' + e);
+    }
+  });
+}
+
+// notifyServer=true → prévient le robot (retire le verrou, l'IA se réveille).
+function closeCall(notifyServer) {
+  // Un même raccrochage déclenche souvent 'participant-left' PUIS 'left-meeting' :
+  // sans ce garde-fou on posterait /call/end deux fois.
+  if (raccrochageEnCours) return;
+  raccrochageEnCours = true;
+  setTimeout(() => { raccrochageEnCours = false; }, 3000);
+
+  if (callObj) {
+    const c = callObj;
+    callObj = null;                    // avant leave() : 'left-meeting' ne doit pas reboucler
+    try { c.leave().then(() => c.destroy()).catch(() => c.destroy()); } catch (e) {}
+  }
+  const holder = document.getElementById('call-audio');
+  if (holder) holder.innerHTML = '';   // retire aussi les <audio> distants
+  if (notifyServer) fetch('/call/end', { method: 'POST' }).catch(() => {});
+  setViewMode('menu');
+}
+
+document.getElementById('call-hangup').addEventListener('click', () => closeCall(true));
+
+// Déclenchement TACTILE de l'assistance : direct (POST /call/start), sans passer
+// par l'IA → marche même si le robot n'a pas compris, ou si la personne ne peut
+// pas parler. Le robot renverra ensuite l'événement SSE {call} qui ouvre l'écran.
+// Motif + langue de l'appel en attente de confirmation (rempli soit par le
+// bouton 🆘, soit par la demande vocale reçue en SSE).
+let pendingAssist = null;
+
+// Affiche l'écran d'avertissement. Employé par les DEUX voies de déclenchement
+// (bouton tactile ET demande vocale) → un seul point de confirmation.
+function showAssistConfirm(motif, langue) {
+  pendingAssist = { motif: motif, langue: langue || currentLang };
+  const t = I18N[pendingAssist.langue] || I18N[currentLang] || I18N.fr;
+  document.getElementById('ac-title').textContent = t.acTitle;
+  document.getElementById('ac-text').textContent = t.acText;
+  document.getElementById('ac-go').textContent = t.acGo;
+  document.getElementById('ac-cancel').textContent = t.acCancel;
+  document.getElementById('assist-confirm').classList.add('on');
+}
+
+// Bouton 🆘 (tactile) : demande d'assistance via l'écran d'avertissement.
+function startAssistance() {
+  showAssistConfirm("Demande d'assistance (bouton tablette)", currentLang);
+}
+
+function fermerConfirmation() {
+  document.getElementById('assist-confirm').classList.remove('on');
+  pendingAssist = null;
+  // Oublie côté serveur la demande vocale en attente : sinon un rechargement de
+  // page la ferait réapparaître (elle est mémorisée pour survivre au reload).
+  fetch('/assist/cancel', { method: 'POST' }).catch(() => {});
+}
+
+function lancerAppelAssistance() {
+  const a = pendingAssist || { motif: "Demande d'assistance", langue: currentLang };
+  document.getElementById('assist-confirm').classList.remove('on');
+  pendingAssist = null;
+  showToast('🆘');
+  fetch('/call/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ motif: a.motif, langue: a.langue }),
+  }).catch(err => console.error('[APPEL] démarrage :', err));
+}
+
+document.getElementById('assist-btn').addEventListener('click', startAssistance);
+document.getElementById('ac-go').addEventListener('click', lancerAppelAssistance);
+document.getElementById('ac-cancel').addEventListener('click', fermerConfirmation);
+// Toucher le fond sombre (hors de la boîte) = annuler.
+document.getElementById('assist-confirm').addEventListener('click', (e) => {
+  if (e.target.id === 'assist-confirm') fermerConfirmation();
+});
+
+// ── Notation de la dernière réponse (avis) ──────────────────────────────
+function sendRating(score) {
+  fetch('/api/rating', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: score, question: lastUserMessage, reponse: lastRobotMessage }),
+  }).then(() => {
+    document.getElementById('stars-container').style.display = 'none';
+    document.getElementById('rating-merci').style.display = 'block';
+    setTimeout(() => {
+      document.getElementById('rating-merci').style.display = 'none';
+      document.getElementById('stars-container').style.display = 'flex';
+    }, 2500);
+  }).catch(err => console.error('Erreur envoi note:', err));
+}
+
+document.querySelectorAll('#stars-container span').forEach(el => {
+  el.addEventListener('click', () => sendRating(parseInt(el.dataset.score, 10)));
+});
 
 function setAiStatus(status) {
+  currentStatus = status;
   aiStatusEl.className = 'status--' + status;
-  aiLabelEl.textContent = AI_LABELS[status] || '';
+  aiLabelEl.textContent = t(status) || '';
+  const ld = document.getElementById('loading');
+  if (ld) {
+    ld.classList.toggle('on', status === 'reflechit');  // overlay chargement (fondu)
+    // Sécurité : jamais bloqué en "Réflexion" au-delà de 15 s (tour sans parole).
+    clearTimeout(_loadingTimer);
+    if (status === 'reflechit') _loadingTimer = setTimeout(() => ld.classList.remove('on'), 15000);
+  }
+  if (status !== 'parle') flushChoices();   // le robot a fini sa phrase → affiche les boutons en attente
 }
 
 // Utilisé uniquement par les boutons tactiles (choix rapides) — la tablette
@@ -334,6 +966,8 @@ function setAiStatus(status) {
 // n'envoie que la réponse d'un tap tactile, en alternative à l'oral.
 function sendResponse(text) {
   setChoices([]);  // masquage optimiste — évite un double-clic pendant l'aller-retour réseau
+  showToast('✓');  // feedback tactile immédiat
+  setViewMode('chat');   // un tap (menu / choix) = une demande → montre la Discussion
   fetch('/respond', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -346,6 +980,44 @@ function sendResponse(text) {
 // pas juste un binaire fixe. Le dernier bouton d'une liste de 2 (typiquement
 // "Non") est stylé en secondaire pour ne pas donner un poids visuel égal à
 // un simple refus.
+// Icône automatique selon le libellé (le robot envoie du texte simple ; on
+// enjolive l'affichage sans changer la valeur renvoyée). Sert surtout aux
+// choix fréquents : modes de transport, oui/non, langues.
+const CHOICE_ICONS = [
+  [/\b(à|a) pied|marche|foot|walk|\bpie\b|fuß|piedi|徒歩/i, '🚶'],
+  [/voiture|\bcar\b|coche|\bauto\b|macchina|車/i, '🚗'],
+  [/transport|transit|\bbus\b|m(é|e)tro|\brer\b|tram|öffentlich|trasporto|transporte|公共/i, '🚌'],
+  [/v(é|e)lo|\bbike\b|bici|fahrrad|自転車|自行车/i, '🚲'],
+  [/taxi|vtc/i, '🚕'],
+  [/train|sncf/i, '🚆'],
+  [/avion|\bvol\b|flight|plane/i, '✈️'],
+  [/^\s*(oui|yes|sí|si|ja|sì|はい|是)\b|d'accord|\bok\b/i, '✅'],
+  [/^\s*(non|no|nein|いいえ|否)\b|annuler|cancel/i, '✖️'],
+  [/fran(ç|c)ais|french/i, '🇫🇷'],
+  [/anglais|english/i, '🇬🇧'],
+];
+function iconFor(label) {
+  for (const [re, ic] of CHOICE_ICONS) if (re.test(label)) return ic;
+  return '';
+}
+
+// Les boutons du RÉFLEXE (Oui/Non, modes de transport) sont envoyés en français
+// par le robot → on TRADUIT l'affichage dans la langue courante. La valeur
+// renvoyée au robot reste le libellé d'origine (il la comprend). Les libellés
+// libres d'un proposer_choix (déjà dans la bonne langue) ne matchent pas → tels quels.
+const CHOICE_LABELS = {
+  'Oui':       { fr:'Oui', en:'Yes', es:'Sí', de:'Ja', it:'Sì', ar:'نعم', zh:'是', ja:'はい' },
+  'Non':       { fr:'Non', en:'No', es:'No', de:'Nein', it:'No', ar:'لا', zh:'否', ja:'いいえ' },
+  'À pied':    { fr:'À pied', en:'On foot', es:'A pie', de:'Zu Fuß', it:'A piedi', ar:'سيرًا', zh:'步行', ja:'徒歩' },
+  'Voiture':   { fr:'Voiture', en:'By car', es:'En coche', de:'Auto', it:'In auto', ar:'سيارة', zh:'开车', ja:'車' },
+  'Transport': { fr:'Transport', en:'Transit', es:'Transporte', de:'ÖPNV', it:'Trasporti', ar:'مواصلات', zh:'公共交通', ja:'公共交通' },
+  'Vélo':      { fr:'Vélo', en:'By bike', es:'En bici', de:'Fahrrad', it:'In bici', ar:'دراجة', zh:'自行车', ja:'自転車' },
+};
+function displayLabel(label) {
+  const m = CHOICE_LABELS[label];
+  return (m && (m[currentLang] || m.en)) || label;
+}
+
 function setChoices(options) {
   choiceButtonsEl.innerHTML = '';
   if (!options || options.length === 0) {
@@ -355,47 +1027,74 @@ function setChoices(options) {
   options.forEach((label, i) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = label;
+    const ic = iconFor(label);
+    const disp = displayLabel(label);                   // libellé traduit dans la langue courante
+    btn.textContent = ic ? ic + '  ' + disp : disp;     // affichage enjolivé + traduit
+    btn.style.animationDelay = (i * 70) + 'ms';         // apparition en cascade
     if (options.length === 2 && i === options.length - 1) btn.classList.add('secondary');
-    btn.addEventListener('click', () => sendResponse(label));
+    btn.addEventListener('click', () => sendResponse(label));  // valeur propre renvoyée
     choiceButtonsEl.appendChild(btn);
   });
   choiceButtonsEl.style.display = 'flex';
 }
 
-function render(state) {
-  idleEl.style.display     = 'none';
-  textView.style.display   = 'none';
-  qrView.style.display     = 'none';
-  planView.style.display   = 'none';
+// Les boutons ne doivent apparaître QUE quand le robot a fini de parler, pas
+// pendant qu'il énonce la question. On met les options en attente si le robot
+// parle encore, et on les affiche quand son état quitte "parle".
+let pendingChoices = null;
+function receiveChoices(options) {
+  if (!options || options.length === 0) { pendingChoices = null; setChoices([]); return; }
+  pendingChoices = options;
+  if (currentStatus !== 'parle') flushChoices();   // robot déjà silencieux → affiche tout de suite
+}
+function flushChoices() {
+  if (pendingChoices) { setChoices(pendingChoices); pendingChoices = null; }
+}
 
+// Cross-fade : une seule vue active à la fois (les autres se fondent en sortie).
+const CARD_VIEWS = [idleEl, textView, qrView, planView, chatView, callView];
+function showView(el) {
+  CARD_VIEWS.forEach(v => v.classList.toggle('is-active', v === el));
+}
+
+function renderContent(state) {
   if (state.type === 'text') {
     document.getElementById('text-titre').textContent   = state.titre || '';
     document.getElementById('text-contenu').textContent = state.contenu || '';
     if (state.qr_url) {
       document.getElementById('text-qr').src = state.qr_url + '?t=' + Date.now();
-      document.getElementById('text-qr-caption').textContent =
-        state.qr_mode === 'link'
-          ? 'Texte trop long pour un QR direct — scannez pour le télécharger sur votre téléphone'
-          : 'Scannez pour récupérer ce texte directement sur votre téléphone';
+      document.getElementById('text-qr-caption').textContent = t('qrText');
     }
-    textView.style.display = 'flex';
+    showView(textView);
   } else if (state.type === 'qr') {
     document.getElementById('qr-titre').textContent = state.titre || '';
     document.getElementById('qr-image').src = state.image_url + '?t=' + Date.now();
-    qrView.style.display = 'flex';
+    showView(qrView);
   } else if (state.type === 'plan') {
     document.getElementById('plan-titre').textContent = state.titre || '';
-    document.getElementById('plan-image').src = state.image_url + '?t=' + Date.now();
+    const mapEl = document.getElementById('plan-map');
+    const imgEl = document.getElementById('plan-image');
+    // Carte interactive (iframe) si dispo, sinon repli sur l'image statique.
+    if (state.embed_url) {
+      // Ne recharge l'iframe QUE si la carte change réellement — évite un
+      // rechargement (et un reset du zoom) à chaque re-render / reconnexion SSE.
+      if (mapEl.getAttribute('data-src') !== state.embed_url) {
+        mapEl.src = state.embed_url;
+        mapEl.setAttribute('data-src', state.embed_url);
+      }
+      mapEl.style.display = 'block';
+      imgEl.style.display = 'none';
+    } else {
+      mapEl.removeAttribute('src');
+      mapEl.style.display = 'none';
+      imgEl.src = state.image_url + '?t=' + Date.now();
+      imgEl.style.display = 'block';
+    }
     document.getElementById('plan-qr').src = state.qr_url + '?t=' + Date.now();
-    planView.style.display = 'flex';
+    showView(planView);
   } else {
-    idleEl.style.display = 'flex';
+    showView(idleEl);
   }
-
-  // Idle = rien d'autre à montrer → la conversation reprend sa place.
-  // Tout autre contenu (texte/QR/plan) → elle se masque automatiquement.
-  setChatPanelVisible(state.type === 'idle' || !state.type);
 }
 
 // État initial injecté par le serveur (évite un écran vide le temps que le SSE se connecte)
@@ -404,20 +1103,73 @@ const initialState   = {{ initial_state | safe }};
 const initialStatus  = {{ initial_status | safe }};
 const initialChoices = {{ initial_choices | safe }};
 const initialChat    = {{ initial_chat | safe }};
-render(initialState);
+// État initial : si le serveur a déjà un contenu, on l'affiche ; sinon accueil.
+if (initialState && initialState.type && initialState.type !== 'idle') {
+  currentContent = initialState; viewMode = 'info';
+} else {
+  viewMode = 'menu';
+}
+applyView();
 setAiStatus(initialStatus);
-setChoices(initialChoices);
+setChoices([]);   // démarrage propre : jamais de boutons hérités au chargement
 initialChat.forEach(m => appendBubble(m.role, m.text));
+buildIdleMenu();
+resetIdleTimer();
 
+// Toute interaction tactile/clavier (pas seulement la voix/robot) repousse le
+// retour en veille → le reset n'a lieu qu'après 90 s SANS rien du tout.
+['pointerdown', 'touchstart', 'keydown'].forEach(ev =>
+  document.addEventListener(ev, resetIdleTimer, { passive: true }));
+
+let _ignoreNextChoices = false;
 function connect() {
   const es = new EventSource('/events');
-  es.onopen = () => { statusEl.textContent = 'connecté'; };
+  es.onopen = () => {
+    statusEl.textContent = 'connecté';
+    _ignoreNextChoices = true;   // ignore les boutons "restaurés" à la connexion (état serveur périmé)
+  };
   es.onmessage = (e) => {
+    resetIdleTimer();   // toute activité repousse le retour en veille
     const msg = JSON.parse(e.data);
-    if (msg.display) { render(msg.display); }
+    if (msg.display) {
+      const d = msg.display;
+      if (d.type && d.type !== 'idle') {
+        currentContent = d;          // nouveau contenu du robot
+        setViewMode('info');         // → bascule sur Affichage pour le montrer
+      } else {
+        currentContent = { type: 'idle' };
+        setViewMode('menu');         // le robot est revenu à l'accueil
+      }
+    }
     else if (msg.status) { setAiStatus(msg.status); }
-    else if ('choices' in msg) { setChoices(msg.choices); }
-    else if (msg.chat) { appendBubble(msg.chat.role, msg.chat.text); }
+    else if (msg.assist_confirm) { showAssistConfirm(msg.assist_confirm.motif, msg.assist_confirm.langue); }  // demande vocale → écran d'avertissement
+    else if (msg.call) { startCall(msg.call); }          // mise en relation humaine
+    else if (msg.call_end) { closeCall(false); }         // le robot a mis fin à l'appel
+    else if (msg.lang_user) {
+      // Langue détectée dans la VOIX du visiteur → canal PRIORITAIRE : toujours
+      // appliqué, y compris un retour au français (c'est ce qu'il parle vraiment).
+      setLang(msg.lang_user);
+    }
+    else if (msg.lang) {
+      // VERROU ANTI-DÉRIVE : le robot peut repasser au français par erreur (biais
+      // du modèle). On IGNORE un retour au 'fr' tant que l'interface est dans une
+      // AUTRE langue. Le français ne revient QUE via le reset (90s), un tap sur 🇫🇷,
+      // ou la VOIX du visiteur (canal lang_user ci-dessus). Un vrai changement vers
+      // une autre langue (en→es…) reste appliqué.
+      if (!(msg.lang === 'fr' && currentLang !== 'fr')) setLang(msg.lang);
+    }
+    else if ('choices' in msg) {
+      if (_ignoreNextChoices) { _ignoreNextChoices = false; receiveChoices([]); }  // burst de connexion → on démarre propre
+      else receiveChoices(msg.choices);
+    }
+    else if (msg.chat) {
+      appendBubble(msg.chat.role, msg.chat.text);
+      // L'utilisateur vient de poser une question (voix) → on passe en vue
+      // Discussion (il voit le dialogue) + on retire les boutons de choix.
+      // Si le robot produit ensuite un contenu (carte/liste), la réception du
+      // "display" rebascule automatiquement sur Affichage.
+      if (msg.chat.role === 'user') { setChoices([]); setViewMode('chat'); }
+    }
   };
   es.onerror = () => {
     statusEl.textContent = 'reconnexion...';

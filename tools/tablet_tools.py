@@ -6,22 +6,23 @@ conversation restent entièrement dans agent/events.py (API Realtime OpenAI).
 Ces 4 tools ne font que piloter l'ÉCRAN annexe (texte/QR/plan/boutons), en
 poussant vers tablet_server via Server-Sent Events.
 
-Portés depuis g1_virtual_tablet (banc de test) — mêmes 4 outils, mêmes
-comportements (synergie avec googlemaps_tools.py déjà présent dans ce
-projet, donc pas de hack sys.path nécessaire ici contrairement au banc de
-test qui vivait dans un projet séparé).
+Réutilise googlemaps_tools.py (compute_route, geocode_address) déjà présent
+dans ce projet pour le calcul d'itinéraire — pas de hack sys.path nécessaire
+ici (contrairement au banc de test g1_virtual_tablet qui vit dans un projet
+séparé).
 """
 
+import base64
 import os
 import socket
 import time
-from urllib.parse import quote
 
 import qrcode
+import requests
 
 from tools.registry import register
 from tools.googlemaps_tools import compute_route, geocode_address
-from tablet_server.server import push_display, push_choices
+from tablet_server.server import push_display, push_choices, push_lang
 
 _BASE_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _STATIC_DIR = os.path.join(_BASE_DIR, "tablet_server", "static")
@@ -32,7 +33,7 @@ _NOTES_DIR = os.path.join(_STATIC_DIR, "notes")
 _TABLET_PORT = 8000
 
 
-def _detect_lan_ip() -> str:
+def _detect_lan_ip():
     """IP locale utilisée pour sortir vers Internet (le wifi/eth partagé) —
     sert à construire un lien LAN accessible depuis un téléphone sur le même
     réseau (fallback QR texte trop long pour tenir dans un seul QR direct)."""
@@ -46,26 +47,26 @@ def _detect_lan_ip() -> str:
         s.close()
 
 
-def _tablet_lan_url() -> str:
-    return f"http://{_detect_lan_ip()}:{_TABLET_PORT}"
+def _tablet_lan_url():
+    return "http://{}:{}".format(_detect_lan_ip(), _TABLET_PORT)
 
 
-def _save_qr(data: str, out_dir: str, prefix: str, error_correction=qrcode.constants.ERROR_CORRECT_M) -> str:
+def _save_qr(data, out_dir, prefix, error_correction=qrcode.constants.ERROR_CORRECT_M):
     os.makedirs(out_dir, exist_ok=True)
-    filename = f"{prefix}_{int(time.time() * 1000)}.png"
+    filename = "{}_{}.png".format(prefix, int(time.time() * 1000))
     filepath = os.path.join(out_dir, filename)
     qr = qrcode.QRCode(error_correction=error_correction)
     qr.add_data(data)
     qr.make(fit=True)
     qr.make_image().save(filepath)
     rel_dir = os.path.relpath(out_dir, _STATIC_DIR)
-    return f"/static/{rel_dir}/{filename}"
+    return "/static/{}/{}".format(rel_dir, filename)
 
 
 # ── proposer_choix ───────────────────────────────────────────────────────────
-def _proposer_choix_handler(options) -> str:
+def _proposer_choix_handler(options):
     push_choices(options)
-    return f"Boutons tactiles affichés : {', '.join(options)}."
+    return "Boutons tactiles affichés : {}.".format(", ".join(options))
 
 
 register(
@@ -100,29 +101,124 @@ register(
 )
 
 
+# ── definir_langue_ecran ──────────────────────────────────────────────────────
+# Langues traduites côté interface (index.html). Repli 'en' sinon.
+_LANG_CODES = {"fr", "en", "es", "de", "it", "ar", "zh", "ja"}
+# Quelques alias courants (nom de langue → code) pour être tolérant.
+_LANG_ALIASES = {
+    "francais": "fr", "français": "fr", "french": "fr",
+    "anglais": "en", "english": "en", "inglés": "en",
+    "espagnol": "es", "spanish": "es", "español": "es", "espanol": "es",
+    "allemand": "de", "german": "de", "deutsch": "de",
+    "italien": "it", "italian": "it", "italiano": "it",
+    "arabe": "ar", "arabic": "ar",
+    "chinois": "zh", "chinese": "zh", "mandarin": "zh",
+    "japonais": "ja", "japanese": "ja", "japon": "ja",
+}
+
+
+def _normalize_lang(langue):
+    l = (langue or "").strip().lower()
+    if l in _LANG_CODES:
+        return l
+    if l in _LANG_ALIASES:
+        return _LANG_ALIASES[l]
+    return l[:2] if l[:2] in _LANG_CODES else "en"
+
+
+def _definir_langue_ecran_handler(langue):
+    code = _normalize_lang(langue)
+    push_lang(code)
+    return "Langue de l'interface réglée sur '{}'.".format(code)
+
+
+register(
+    {
+        "name": "definir_langue_ecran",
+        "description": (
+            "Adapte la langue de l'interface de la tablette à celle du visiteur. "
+            "Appelle ce tool dès que tu détectes la langue parlée par l'utilisateur "
+            "(ou quand il change de langue), en plus de lui répondre dans cette langue. "
+            "Langues gérées : fr, en, es, de, it, ar, zh, ja (repli anglais sinon)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "langue": {
+                    "type": "string",
+                    "description": "Code de langue (fr, en, es, de, it, ar, zh) ou nom (français, anglais...).",
+                },
+            },
+            "required": ["langue"],
+        },
+    },
+    _definir_langue_ecran_handler,
+)
+
+
 # ── afficher_texte_ecran ──────────────────────────────────────────────────────
+_NOTE_PAGE_TEMPLATE = """<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{titre}</title>
+<style>
+  body {{ margin:0; padding:24px; background:#f4f2fb; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; color:#1a1a2e; }}
+  h1 {{ font-size:1.4em; color:#6c2bd9; margin:0 0 16px; }}
+  pre {{ white-space:pre-wrap; word-wrap:break-word; font-family:inherit; font-size:1.05em; line-height:1.5; margin:0; }}
+</style></head>
+<body><h1>{titre}</h1><pre>{contenu}</pre></body></html>"""
+
+
+def _html_escape(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# Au-delà de cette longueur, l'URL (texte encodé en base64) rend le QR trop
+# dense pour être scanné de façon fiable — on tronque proprement (la liste
+# complète reste lisible à l'écran du robot de toute façon).
+_QR_TEXT_MAX = 900
+
+# Pages publiques n8n : /note-save (POST texte → URL courte) et /note (GET la page).
+_N8N_NOTE_URL      = os.environ.get("N8N_NOTE_URL",      "https://n8n.i-interim.com/webhook/note")
+_N8N_NOTE_SAVE_URL = os.environ.get("N8N_NOTE_SAVE_URL", "https://n8n.i-interim.com/webhook/note-save")
+
+
 def _save_text_retrieval_qr(titre, contenu_texte):
+    """QR de récupération. Stratégie en 2 temps :
+    1) On envoie le texte à n8n qui le STOCKE et renvoie une URL COURTE
+       (…/note?id=abcd) → le QR reste petit et scannable quelle que soit la
+       longueur de la liste.
+    2) Repli si n8n indisponible : on encode le texte en base64 dans l'URL
+       (…/note?d=…) — QR plus dense mais fonctionne quand même.
+    Au scan, la page n8n propose un bouton natif "Enregistrer dans mes notes"."""
+    payload = "{}\n\n{}".format(titre, contenu_texte).strip()
+
+    note_url = None
     try:
-        url = _save_qr(contenu_texte, _QR_DIR, "qr", error_correction=qrcode.constants.ERROR_CORRECT_L)
-        return url, "text"
-    except (qrcode.exceptions.DataOverflowError, ValueError):
-        os.makedirs(_NOTES_DIR, exist_ok=True)
-        filename = f"note_{int(time.time() * 1000)}.txt"
-        filepath = os.path.join(_NOTES_DIR, filename)
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"{titre}\n{'=' * len(titre)}\n\n{contenu_texte}\n")
-        note_link = f"{_tablet_lan_url()}/static/notes/{filename}"
-        url = _save_qr(note_link, _QR_DIR, "qr")
-        return url, "link"
+        r = requests.post(_N8N_NOTE_SAVE_URL, json={"text": payload}, timeout=6)
+        if r.status_code == 200:
+            note_url = (r.json() or {}).get("url")
+    except Exception:
+        note_url = None
+
+    if not note_url:   # repli base64-dans-l'URL (tronqué pour rester scannable)
+        p = payload
+        if len(p) > _QR_TEXT_MAX:
+            p = p[:_QR_TEXT_MAX].rstrip() + "\n[...] (liste complète sur l'écran du robot)"
+        b64 = base64.urlsafe_b64encode(p.encode("utf-8")).decode("ascii")
+        note_url = "{}?d={}".format(_N8N_NOTE_URL, b64)
+
+    url = _save_qr(note_url, _QR_DIR, "qr", error_correction=qrcode.constants.ERROR_CORRECT_L)
+    return url, "link"
 
 
-def _afficher_texte_ecran_handler(titre, contenu_texte) -> str:
+def _afficher_texte_ecran_handler(titre, contenu_texte):
     qr_url, qr_mode = _save_text_retrieval_qr(titre, contenu_texte)
     push_display({
         "type": "text", "titre": titre, "contenu": contenu_texte,
         "qr_url": qr_url, "qr_mode": qr_mode,
     })
-    return f"Texte affiché à l'écran : '{titre}' (QR de récupération : {qr_mode})."
+    return "Texte affiché à l'écran : '{}' (QR de récupération : {}).".format(titre, qr_mode)
 
 
 register(
@@ -131,10 +227,9 @@ register(
         "description": (
             "Affiche un texte formaté (titre + contenu) en plein écran sur la "
             "tablette du robot, accompagné d'un QR code permettant de récupérer ce "
-            "texte directement sur le téléphone de l'utilisateur (scan -> texte "
-            "copiable, aucun réseau requis). À utiliser uniquement après confirmation "
-            "explicite de l'utilisateur, pour une information textuelle dense (listes, "
-            "horaires, résultats multiples)."
+            "texte directement sur le téléphone de l'utilisateur. À utiliser "
+            "uniquement après confirmation explicite de l'utilisateur, pour une "
+            "information textuelle dense (listes, horaires, résultats multiples)."
         ),
         "parameters": {
             "type": "object",
@@ -153,10 +248,10 @@ register(
 
 
 # ── afficher_qr_ecran ─────────────────────────────────────────────────────────
-def _afficher_qr_ecran_handler(titre, donnee_a_encoder) -> str:
+def _afficher_qr_ecran_handler(titre, donnee_a_encoder):
     image_url = _save_qr(donnee_a_encoder, _QR_DIR, "qr")
     push_display({"type": "qr", "titre": titre, "image_url": image_url})
-    return f"QR code affiché à l'écran : '{titre}'."
+    return "QR code affiché à l'écran : '{}'.".format(titre)
 
 
 register(
@@ -188,21 +283,21 @@ _VALID_MODES = {"driving", "walking", "transit", "bicycling"}
 _MODE_TO_ROUTES_API = {"driving": "DRIVE", "walking": "WALK", "transit": "TRANSIT", "bicycling": "BICYCLE"}
 
 
-def _afficher_plan_ecran_handler(titre, origine, destination, mode) -> str:
+def _afficher_plan_ecran_handler(titre, origine, destination, mode):
     if mode not in _VALID_MODES:
-        return f"[ERREUR] mode invalide '{mode}' — attendu : {', '.join(sorted(_VALID_MODES))}."
+        return "[ERREUR] mode invalide '{}' — attendu : {}.".format(mode, ", ".join(sorted(_VALID_MODES)))
 
     geo_origine = geocode_address(origine)
     if "error" in geo_origine:
         return (
-            f"[ERREUR] Lieu de départ introuvable : '{origine}' ({geo_origine['error']}). "
-            f"Redemande à l'utilisateur un lieu plus précis (ville, quartier)."
+            "[ERREUR] Lieu de départ introuvable : '{}' ({}). "
+            "Redemande à l'utilisateur un lieu plus précis (ville, quartier).".format(origine, geo_origine['error'])
         )
     geo_dest = geocode_address(destination)
     if "error" in geo_dest:
         return (
-            f"[ERREUR] Lieu d'arrivée introuvable : '{destination}' ({geo_dest['error']}). "
-            f"Redemande à l'utilisateur un lieu plus précis (ville, quartier)."
+            "[ERREUR] Lieu d'arrivée introuvable : '{}' ({}). "
+            "Redemande à l'utilisateur un lieu plus précis (ville, quartier).".format(destination, geo_dest['error'])
         )
 
     route = compute_route(
@@ -212,8 +307,9 @@ def _afficher_plan_ecran_handler(titre, origine, destination, mode) -> str:
     )
     if "error" in route:
         return (
-            f"[ERREUR] Itinéraire introuvable entre '{origine}' et '{destination}' en mode "
-            f"{mode} ({route['error']}). Redemande un autre mode de transport ou des lieux plus précis."
+            "[ERREUR] Itinéraire introuvable entre '{}' et '{}' en mode {} ({}). "
+            "Redemande un autre mode de transport ou des lieux plus précis.".format(
+                origine, destination, mode, route['error'])
         )
 
     import requests
@@ -224,33 +320,46 @@ def _afficher_plan_ecran_handler(titre, origine, destination, mode) -> str:
         "https://maps.googleapis.com/maps/api/staticmap",
         params={
             "size": "640x640",
-            "markers": [f"color:green|label:A|{lat_o},{lng_o}", f"color:red|label:B|{lat_d},{lng_d}"],
+            "markers": ["color:green|label:A|{},{}".format(lat_o, lng_o),
+                        "color:red|label:B|{},{}".format(lat_d, lng_d)],
             "key": api_key,
         },
         timeout=8,
     )
     if static_map.status_code != 200:
-        return f"[ERREUR] Génération de la carte échouée (HTTP {static_map.status_code})."
+        return "[ERREUR] Génération de la carte échouée (HTTP {}).".format(static_map.status_code)
 
     os.makedirs(_PLANS_DIR, exist_ok=True)
-    filename = f"plan_{int(time.time() * 1000)}.png"
+    filename = "plan_{}.png".format(int(time.time() * 1000))
     with open(os.path.join(_PLANS_DIR, filename), "wb") as f:
         f.write(static_map.content)
 
-    image_url = f"/static/plans/{filename}"
+    image_url = "/static/plans/{}".format(filename)
     gmaps_link = (
         "https://www.google.com/maps/dir/?api=1"
-        f"&origin={lat_o},{lng_o}&destination={lat_d},{lng_d}&travelmode={mode}"
+        "&origin={},{}&destination={},{}&travelmode={}".format(lat_o, lng_o, lat_d, lng_d, mode)
     )
     qr_url = _save_qr(gmaps_link, _QR_DIR, "qr")
 
-    push_display({"type": "plan", "titre": titre, "image_url": image_url, "qr_url": qr_url})
+    # Carte INTERACTIVE (zoom/déplacement, tracé de l'itinéraire) via l'API
+    # Maps Embed — la tablette a Internet, elle charge l'iframe directement.
+    # L'image statique reste envoyée en repli si l'iframe ne charge pas.
+    embed_url = (
+        "https://www.google.com/maps/embed/v1/directions"
+        "?key={}&origin={},{}&destination={},{}&mode={}".format(
+            api_key, lat_o, lng_o, lat_d, lng_d, mode)
+    )
+
+    push_display({
+        "type": "plan", "titre": titre,
+        "image_url": image_url, "qr_url": qr_url, "embed_url": embed_url,
+    })
 
     duration_s = route.get("duration", "").rstrip("s") or "?"
     distance_km = round(route.get("distance_meters", 0) / 1000, 1)
     return (
-        f"Carte affichée à l'écran : '{titre}' (itinéraire {origine} → {destination}, "
-        f"mode={mode}, {distance_km} km, ~{duration_s}s)."
+        "Carte affichée à l'écran : '{}' (itinéraire {} → {}, mode={}, {} km, ~{}s).".format(
+            titre, origine, destination, mode, distance_km, duration_s)
     )
 
 

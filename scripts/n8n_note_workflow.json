@@ -1,0 +1,153 @@
+{
+  "name": "recherche-note",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "note",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-note-(get)",
+      "name": "Webhook note (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "note-get-wh"
+    },
+    {
+      "parameters": {
+        "jsCode": "const store = $getWorkflowStaticData('global');\nconst q = $json.query || {};\nlet text = '';\nif (q.id && store.notes && store.notes[q.id]) {\n  text = store.notes[q.id].text;\n} else if (q.d) {\n  try { text = Buffer.from(String(q.d).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8'); } catch (e) {}\n}\nconst lines = String(text).split('\\n');\nconst title = lines[0] || '';\nconst content = lines.slice(1).join('\\n').replace(/^\\n+/, '');\nconst esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst jsFull = JSON.stringify(text || '');\nconst hasText = String(text).trim().length > 0;\nconst html = `<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n<title>Ma liste — I-Interim</title>\n<style>\n:root{--accent:#7B2CBF;--accent2:#9D4EDD;--bg:#F3F0FA;--card:#fff;--text:#1E1B29;--muted:#6B6780;}\n*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}\nbody{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;padding:20px;padding-bottom:calc(20px + env(safe-area-inset-bottom));}\n.wrap{max-width:640px;margin:0 auto;}\nheader{display:flex;align-items:center;gap:12px;margin-bottom:18px;}\n.mark{width:40px;height:40px;border-radius:12px;flex-shrink:0;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;}\nh1{font-size:1.15rem;margin:0;}\n.card{background:var(--card);border-radius:20px;padding:20px;box-shadow:0 12px 30px rgba(72,26,122,.10);}\n.note-title{font-size:1.25rem;font-weight:800;color:var(--accent);margin:0 0 12px;}\npre{white-space:pre-wrap;word-wrap:break-word;font-family:inherit;font-size:1.02rem;line-height:1.6;margin:0;}\n.actions{position:sticky;bottom:0;display:flex;gap:10px;margin-top:18px;padding:12px 0 4px;}\nbutton{flex:1;font-family:inherit;font-size:1.05rem;font-weight:700;border:none;border-radius:16px;padding:16px;cursor:pointer;}\n#share{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;box-shadow:0 10px 24px rgba(123,44,191,.3);}\n#copy{background:#fff;color:var(--muted);border:2px solid rgba(123,44,191,.18);}\nbutton:active{transform:scale(.97);}\n.toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--text);color:#fff;padding:12px 20px;border-radius:999px;font-size:.95rem;opacity:0;transition:opacity .25s;pointer-events:none;}\n.toast.show{opacity:1;}\n.empty{color:var(--muted);text-align:center;padding:40px 0;}\n</style></head><body><div class=\"wrap\">\n<header><div class=\"mark\">G1</div><h1>Robot I-Interim</h1></header>\n<div class=\"card\">${hasText ? `<div class=\"note-title\">${esc(title)}</div><pre>${esc(content)}</pre>` : `<div class=\"empty\">Aucun contenu à afficher.</div>`}</div>\n${hasText ? `<div class=\"actions\"><button id=\"share\">📝 Enregistrer dans mes notes</button><button id=\"copy\">📋 Copier</button></div>` : ``}\n</div><div class=\"toast\" id=\"toast\"></div>\n<script>\nconst fullText = ${jsFull};\nfunction toast(m){const t=document.getElementById('toast');if(!t)return;t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}\nasync function copyText(){try{await navigator.clipboard.writeText(fullText);}catch(e){const ta=document.createElement('textarea');ta.value=fullText;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);}}\nconst sb=document.getElementById('share');\nif(sb){sb.addEventListener('click',async()=>{if(navigator.share){try{await navigator.share({title:document.title,text:fullText});}catch(e){}}else{await copyText();toast('Copié — collez dans vos notes');}});}\nconst cb=document.getElementById('copy');\nif(cb){cb.addEventListener('click',async()=>{await copyText();toast('Copié ✔');});}\n</script></body></html>`;\nreturn [{ json: { html } }];"
+      },
+      "id": "servir",
+      "name": "Servir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-html",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "note-save",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-note-save-(post)",
+      "name": "Webhook note-save (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "webhookId": "note-save-wh"
+    },
+    {
+      "parameters": {
+        "jsCode": "const store = $getWorkflowStaticData('global');\nif (!store.notes) store.notes = {};\nconst now = Date.now();\n// nettoyage : on jette les notes de plus de 24h (le store ne gonfle pas)\nfor (const k of Object.keys(store.notes)) {\n  if (now - (store.notes[k].ts || 0) > 86400000) delete store.notes[k];\n}\nconst body = $json.body || $json;\nconst text = String(body.text || '');\nlet id;\ndo { id = Math.random().toString(36).slice(2, 8); } while (store.notes[id]);\nstore.notes[id] = { text, ts: now };\nreturn [{ json: { id, url: 'https://n8n.i-interim.com/webhook/note?id=' + id } }];"
+      },
+      "id": "stocker",
+      "name": "Stocker",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "id": "respond-json",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        440,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook note (GET)": {
+      "main": [
+        [
+          {
+            "node": "Servir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Servir": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook note-save (POST)": {
+      "main": [
+        [
+          {
+            "node": "Stocker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stocker": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

@@ -1,0 +1,128 @@
+{
+  "name": "assistance-robot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "assistance",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-assistance-post",
+      "name": "Webhook assistance (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "assistance-wh"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formate l'alerte d'assistance envoyée par le robot G1.\nconst b = $json.body || $json;\nconst noms = { fr:'français', en:'anglais', es:'espagnol', de:'allemand',\n               it:'italien', ar:'arabe', zh:'chinois', ja:'japonais' };\nconst langue = noms[b.langue] || b.langue || 'non précisée';\nconst message =\n`Motif : ${b.motif || '(non précisé)'}\nLangue du visiteur : ${langue}\nHeure : ${b.horodatage || ''}\n\nTouchez cette notification pour rejoindre l'appel et parler au visiteur.\nLien : ${b.url}`;\nreturn [{ json: {\n  message,\n  motif: b.motif || '',\n  langue,\n  url: b.url || '',\n  salon: b.salon || '',\n  horodatage: b.horodatage || '',\n  ok: true\n} }];"
+      },
+      "id": "formater-le-message",
+      "name": "Formater le message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://ntfy.sh/g1-assist-CHANGE-MOI",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Title",
+              "value": "ASSISTANCE - Robot G1"
+            },
+            {
+              "name": "Priority",
+              "value": "urgent"
+            },
+            {
+              "name": "Tags",
+              "value": "rotating_light"
+            },
+            {
+              "name": "Click",
+              "value": "={{ $json.url }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain; charset=utf-8",
+        "body": "={{ $json.message }}",
+        "options": {}
+      },
+      "id": "notifier-ntfy",
+      "name": "Notifier (ntfy)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook assistance (POST)": {
+      "main": [
+        [
+          {
+            "node": "Formater le message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formater le message": {
+      "main": [
+        [
+          {
+            "node": "Notifier (ntfy)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notifier (ntfy)": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
