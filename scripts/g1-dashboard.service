@@ -1,0 +1,17 @@
+[Unit]
+Description=Dashboard superviseur G1 (ESP32 bouche, taches, capteurs) - port 8888
+After=network.target
+
+[Service]
+Type=simple
+User=unitree
+Environment=HOME=/home/unitree
+WorkingDirectory=/home/unitree/g1_agent_interim
+ExecStart=/usr/bin/python3.8 /home/unitree/g1_agent_interim/dashboard.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/unitree/dashboard.log
+StandardError=append:/home/unitree/dashboard.log
+
+[Install]
+WantedBy=multi-user.target

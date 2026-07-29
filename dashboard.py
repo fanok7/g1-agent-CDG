@@ -175,10 +175,25 @@ def _pipe_logs(proc, nom):
     broadcast(f"[Dashboard] {nom} terminé (code {proc.returncode})")
 
 
+_RETRY_INTERVAL_S = 30
+
+
 def _ecoute_serie():
     global _ser
+    next_retry = 0.0
     while True:
-        if _ser is None or not _ser.in_waiting:
+        if _ser is None:
+            # Retente une connexion toutes les 30s tant que l'ESP32 n'est pas
+            # branché (au démarrage OU après une perte) — avant ce correctif,
+            # une seule tentative échouée laissait _ser à None pour toujours,
+            # sans jamais retenter même si l'ESP32 était rebranché plus tard.
+            now = time.time()
+            if now >= next_retry:
+                init_serie()
+                next_retry = time.time() + _RETRY_INTERVAL_S
+            time.sleep(0.5)
+            continue
+        if not _ser.in_waiting:
             time.sleep(0.05)
             continue
         try:
@@ -201,8 +216,7 @@ def _ecoute_serie():
         except (serial.SerialException, OSError) as e:
             log(f"[Dashboard] Perte ESP32 : {e}")
             _ser = None
-            time.sleep(3)
-            init_serie()
+            next_retry = time.time() + _RETRY_INTERVAL_S
         except Exception as e:
             log(f"[Dashboard] Erreur serie : {e}")
 

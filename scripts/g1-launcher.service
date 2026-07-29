@@ -1,0 +1,14 @@
+[Unit]
+Description=Serveur de demarrage G1 (page "Demarrer" sur le port 8000 tant que main.py ne tourne pas)
+After=network.target adb-reverse-tablet.service
+
+[Service]
+Type=simple
+User=unitree
+Environment=HOME=/home/unitree
+ExecStart=/usr/bin/python3.8 /home/unitree/g1_agent_interim/launcher_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
