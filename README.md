@@ -12,7 +12,12 @@ Seul le LLM est distant : l'audio du micro part en streaming vers l'**API OpenAI
 │  • génère l'audio réponse   │         │  • supervise vision + librespot       │
 └─────────────────────────────┘         └───────────────────────────────────────┘
 ```
-Vidéo de démonstration: [![Demo G1 Agent](https://img.youtube.com/vi/fDE_c2kgEHU/maxresdefault.jpg)](https://www.youtube.com/watch?v=fDE_c2kgEHU)
+Vidéo de démonstration: 
+## Vidéo de démonstration 1
+[![Demo G1 Agent à l'aéroport](https://img.youtube.com/vi/fDE_c2kgEHU/maxresdefault.jpg)](https://www.youtube.com/watch?v=fDE_c2kgEHU)
+
+## Vidéo de démonstration 2
+[![Demo 2](https://img.youtube.com/vi/pPBh3XzLi3g/maxresdefault.jpg)](https://youtu.be/pPBh3XzLi3g)
 
 ## Documentation par fonctionnalité
 
