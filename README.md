@@ -1,8 +1,8 @@
 # G1 Agent Aéroportuaire 
 
-Agent vocal d'accueil pour aéroportuaire pour Charles de Gaulle aéroport, tournant sur robot **Unitree G1 EDU** (calculateur Jetson Orin NX).
+Model IA agent vocal d'accueil aéroportuaire, et plus spécifiquement pour Charles de Gaulle aéroport, tournant sur un robot humainoïde **Unitree G1 EDU** (ordinateur Jetson Orin NX).
 
-Seul le LLM est distant : l'audio du micro part en streaming vers l'**API OpenAI Realtime**, qui renvoie soit de l'audio à jouer, soit un appel de tool. **Tout le reste — capture micro, lecture haut-parleur, vision, gestes, exécution des tools — tourne en local sur le Jetson.** Le robot fonctionne donc sans aucun serveur intermédiaire : une connexion WebSocket sortante suffit.
+Seul le LLM est distant, l'audio du micro part en streaming vers l'**API OpenAI Realtime**, qui renvoie soit de l'audio à jouer, soit un appel de tool soit les deux. **Tout le reste — capture micro, lecture haut-parleur, vision, gestes, exécution des tools — tourne en local sur le Jetson.**
 
 ```text
 ┌─ Cloud OpenAI ──────────────┐         ┌─ Jetson Orin NX (local) ──────────────┐
@@ -140,50 +140,5 @@ Pour piloter en plus la bouche/émotions via l'ESP32 (couche optionnelle) :
 
 ```bash
 cd /home/unitree/unitree_sdk2_python && python3.8 /home/unitree/g1_agent_interim/launch.py
-```
-
----
-
-## Arborescence
-
-```text
-g1_agent_interim/
-├── main.py                  # Point d'entrée : init hardware + supervision sous-processus vision
-├── launch.py                # Superviseur ESP32 (bouche/émotions) — couche optionnelle
-├── config.py                # Clés API, voix, system prompts (IINTERIM / CDG)
-├── agent/
-│   ├── session.py           # Connexion WebSocket OpenAI Realtime
-│   └── events.py            # Boucles async : audio, events, face/rps/fall/fire loops
-├── robot/
-│   ├── audio.py             # Micro USB + lecture HP (resampling numpy)
-│   ├── arm_sdk.py           # Contrôle bras DDS bas niveau
-│   ├── gestures.py          # execute_gesture() — ACTION_MAP geste→code
-│   ├── hand_control.py      # Mains Inspire RH56E2 (Modbus TCP)
-│   ├── shake_hand.py        # Poignée de main réactive (capteur paume)
-│   └── spotify_player.py    # librespot → resample → HP
-├── tools/                   # Tools exposés au LLM via registry (self-import dans main.py)
-│   ├── registry.py          # register() / get_schemas() / call()
-│   ├── calendar_tool.py     # 6 tools Google Agenda (agenda, RDV, créneaux, création)
-│   ├── vision_tool.py       # ce_que_je_vois + identifier_personne
-│   ├── airlabs_tools.py     # 7 tools vols temps réel (Airlabs)
-│   ├── googlemaps_tools.py  # 7 tools lieux/itinéraires (Google Maps)
-│   ├── transport_tools.py   # 5 tools transport IDF (geroTransport)
-│   ├── spotify_tool.py      # 4 tools Spotify (jouer/contrôle/volume)
-│   ├── gesture_tool.py      # executer_geste + relacher_bras
-│   ├── shake_hand_tool.py   # serrer la main (via robot/shake_hand.py)
-│   ├── screenshot_tool.py   # prendre_screenshot + envoi email
-│   ├── qr_tool.py           # scanner_billet (QR code boarding pass)
-│   ├── datetime_tool.py     # date_heure_actuelle
-│   └── web_search.py        # recherche_web (Serper)
-├── scripts/                 # Setup OAuth one-shot (PAS des tools agent)
-│   ├── calendar_setup.py    # Token Google Agenda (lecture + écriture)
-│   ├── gmail_setup.py       # Token Gmail
-│   └── spotify_setup.py     # Auth librespot
-└── vision/
-    ├── vision_server.py     # YOLO dual-cam (UGREEN + RealSense) → /tmp/vision_state.json
-    ├── face_id/             # InsightFace GPU (miniconda) → /tmp/face_id_state.json
-    ├── fall_detection/      # YOLOv11 détection de chute → /tmp/fall_state.json
-    ├── fire_detection/      # YOLOv26 détection feu/fumée → /tmp/fire_state.json
-    └── rps/                 # Mini-jeu Pierre Feuille Ciseaux
 ```
 
