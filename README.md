@@ -1,6 +1,6 @@
 # G1 Agent Aéroportuaire 
 
-Model IA agent vocal d'accueil aéroportuaire, et plus spécifiquement pour Charles de Gaulle aéroport, tournant sur un robot humainoïde **Unitree G1 EDU** (ordinateur Jetson Orin NX).
+Model IA agent vocal d'accueil aéroportuaire, et plus spécifiquement pour Charles de Gaulle aéroport, tournant sur un robot humanoïde **Unitree G1 EDU** (ordinateur Jetson Orin NX).
 
 Seul le LLM est distant, l'audio du micro part en streaming vers l'**API OpenAI Realtime**, qui renvoie soit de l'audio à jouer, soit un appel de tool soit les deux. **Tout le reste — capture micro, lecture haut-parleur, vision, gestes, exécution des tools — tourne en local sur le Jetson.**
 
