@@ -304,9 +304,25 @@ st.divider()
 
 # ── Questions fréquentes ────────────────────────────────────────────────────
 st.subheader("❓ Questions les plus fréquentes")
-if not q.empty and "q_anonymized" in q:
-    freq = (q["q_anonymized"].value_counts().head(15).rename_axis("Question (anonymisée)")
-            .reset_index(name="Occurrences"))
+qq = q[q["q_anonymized"].notna() & (q["q_anonymized"] != "")] if "q_anonymized" in q else q.iloc[0:0]
+if not qq.empty:
+    # Le texte reste dans la langue d'origine (pas de traduction) ; on ajoute la
+    # LANGUE de chaque question (langue majoritaire pour ce texte) pour que
+    # l'admin sache dans quelle langue elle a été posée.
+    if "lang" in qq.columns:
+        def _langue_dominante(s):
+            m = s.dropna().mode()
+            code = m.iat[0] if not m.empty else ""
+            return LANG_NOMS.get(code, code) if code else "—"
+        freq = (qq.groupby("q_anonymized")
+                  .agg(Occurrences=("q_anonymized", "size"), Langue=("lang", _langue_dominante))
+                  .reset_index()
+                  .rename(columns={"q_anonymized": "Question (anonymisée)"})
+                  .sort_values("Occurrences", ascending=False).head(15))
+        freq = freq[["Question (anonymisée)", "Langue", "Occurrences"]]
+    else:
+        freq = (qq["q_anonymized"].value_counts().head(15)
+                .rename_axis("Question (anonymisée)").reset_index(name="Occurrences"))
     st.dataframe(freq, width="stretch", hide_index=True)
 else:
     st.caption("Aucune question enregistrée.")

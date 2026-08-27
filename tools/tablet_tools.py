@@ -3,7 +3,7 @@ tools/tablet_tools.py — Outils d'affichage sur la tablette embarquée du robot
 
 La tablette n'a pas de cerveau à elle : le micro, le haut-parleur et l'IA de
 conversation restent entièrement dans agent/events.py (API Realtime OpenAI).
-Ces 4 tools ne font que piloter l'ÉCRAN annexe (texte/QR/plan/boutons), en
+Ces 6 tools ne font que piloter l'ÉCRAN annexe (texte/QR/plan/boutons/clavier), en
 poussant vers tablet_server via Server-Sent Events.
 
 Réutilise googlemaps_tools.py (compute_route, geocode_address) déjà présent
@@ -31,6 +31,14 @@ _PLANS_DIR = os.path.join(_STATIC_DIR, "plans")
 _NOTES_DIR = os.path.join(_STATIC_DIR, "notes")
 
 _TABLET_PORT = 8000
+
+# Page publique Google Calendar (self-service) où les candidats I-Interim
+# choisissent eux-mêmes leur créneau de RDV — c'est le mode de prise de RDV
+# utilisé en pratique aujourd'hui, indépendant de creer_rdv (écriture directe
+# par le robot dans calendar_tool.py). Overridable via .env si le lien change.
+RDV_INTERIM_BOOKING_URL = os.environ.get(
+    "RDV_INTERIM_BOOKING_URL", "https://calendar.app.google/V1pLGm24Zn6LbtEN6"
+)
 
 
 def _detect_lan_ip():
@@ -394,4 +402,86 @@ register(
         },
     },
     _afficher_plan_ecran_handler,
+)
+
+
+# ── demander_saisie ───────────────────────────────────────────────────────────
+# Clavier tactile structuré : un champ texte par libellé demandé (ex: "Prénom",
+# "Nom"), rempli par le visiteur via le clavier natif Android (aucun clavier
+# custom à maintenir — un simple <input type="text"> suffit en kiosque). La
+# saisie repart par le même chemin qu'un tap sur un bouton (POST /respond →
+# agent.text_input.input_queue) : le serveur ne sait rien du contenu, c'est le
+# LLM qui interprète le texte reçu, exactement comme une réponse dite au micro.
+_MAX_CHAMPS = 4
+
+
+def _demander_saisie_handler(titre, champs):
+    if not champs or not isinstance(champs, list):
+        return "[ERREUR] 'champs' doit être une liste non vide de libellés (ex: ['Prénom', 'Nom'])."
+    champs = [str(c).strip() for c in champs[:_MAX_CHAMPS] if str(c).strip()]
+    if not champs:
+        return "[ERREUR] 'champs' doit contenir au moins un libellé non vide."
+    push_display({"type": "input", "titre": titre, "champs": champs})
+    return "Clavier affiché à l'écran pour saisir : {}.".format(", ".join(champs))
+
+
+register(
+    {
+        "name": "demander_saisie",
+        "description": (
+            "Affiche un clavier tactile sur la tablette pour que le visiteur saisisse "
+            "lui-même une ou plusieurs informations (nom, prénom, téléphone, email...) "
+            "au lieu de les dire à l'oral. Utile quand la reconnaissance vocale se trompe "
+            "sur un nom propre, dans un environnement bruyant, ou pour confirmer une "
+            "orthographe exacte (ex: avant chercher_rdv_personne ou creer_rdv). "
+            "Une fois validé par le visiteur, le contenu saisi t'arrive comme s'il te "
+            "l'avait dit à voix haute — continue la conversation normalement à partir de là "
+            "(par exemple en appelant chercher_rdv_personne avec le nom reçu)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "titre": {
+                    "type": "string",
+                    "description": "Titre court affiché en haut de l'écran, DANS LA LANGUE du visiteur (ex: 'Votre identité').",
+                },
+                "champs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": _MAX_CHAMPS,
+                    "description": (
+                        "Libellés des champs à saisir, dans l'ordre, DANS LA LANGUE du "
+                        "visiteur (ex: ['Prénom', 'Nom'] ou ['First name', 'Last name']). "
+                        "2 à 4 champs max."
+                    ),
+                },
+            },
+            "required": ["titre", "champs"],
+        },
+    },
+    _demander_saisie_handler,
+)
+
+
+# ── afficher_qr_rdv_ecran ─────────────────────────────────────────────────────
+def _afficher_qr_rdv_handler():
+    image_url = _save_qr(RDV_INTERIM_BOOKING_URL, _QR_DIR, "qr")
+    push_display({"type": "qr", "titre": "Prendre rendez-vous", "image_url": image_url})
+    return "QR de prise de rendez-vous affiché à l'écran."
+
+
+register(
+    {
+        "name": "afficher_qr_rdv_ecran",
+        "description": (
+            "Affiche à l'écran un QR code vers la page Google Calendar où le visiteur "
+            "choisit lui-même son créneau de rendez-vous (les intérimaires réservent en "
+            "self-service). Appelle ce tool quand un visiteur qui n'a PAS encore de "
+            "rendez-vous veut en prendre un. Ne mentionne jamais l'adresse du lien à "
+            "l'oral — dis seulement de scanner le QR affiché."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    _afficher_qr_rdv_handler,
 )

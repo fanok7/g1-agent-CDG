@@ -20,12 +20,16 @@ Seul le LLM est distant, l'audio du micro part en streaming vers l'**API OpenAI 
 
 ## Documentation par fonctionnalité
 
+- **[TABLETTE.md](TABLETTE.md)** — écran tactile du robot : liaison USB (`adb reverse`),
+  serveur SSE, interface, **dépannage et pistes d'évolution.** À lire avant toute
+  intervention sur la tablette.
 - **[DASHBOARD.md](DASHBOARD.md)** — dashboard de télémétrie Streamlit : lancement,
   lecture, export Excel. **Mode d'emploi complet.**
 - **[STATISTIQUES.md](STATISTIQUES.md)** — la télémétrie côté données (ce qui est
   mesuré, anonymat, fichiers de données).
 - **[ASSISTANCE.md](ASSISTANCE.md)** — appel d'assistance humaine (bouton 🆘 + vocal,
-  Daily.co, audio par le robot, écran d'avertissement).
+  salon Daily, alerte n8n/ntfy, sourdine de l'IA, audio par le robot). Contient la
+  procédure de **changement de compte Daily**.
 
 ## Dashboard de télémétrie — démarrage rapide
 
@@ -36,8 +40,44 @@ le PC. **Détails : [DASHBOARD.md](DASHBOARD.md).**
 # sur le robot (SSH) — headless auto
 cd /home/unitree/g1_agent_interim && bash scripts/lancer_dashboard.sh
 ```
-Puis, dans le navigateur du PC : **http://192.168.123.164:8501**
 
+Puis, dans le navigateur du PC : **`http://192.168.123.164:8501`**
+
+> **La règle :** le serveur écoute sur `0.0.0.0`, donc les deux adresses du robot
+> fonctionnent — il faut prendre **celle du réseau sur lequel ton PC est branché** :
+>
+> | Comment ton PC est relié au robot | Adresse à utiliser |
+> |---|---|
+> | Lien direct eth0 (le cas habituel — c'est par là que tu fais SSH) | **`192.168.123.164`** |
+> | Même Wi-Fi que le robot | l'IP wlan0, `ip -4 -o addr show wlan0` (aujourd'hui `192.168.0.128`) |
+>
+> Le `Network URL` imprimé par Streamlit annonce l'adresse Wi-Fi : ce n'est **pas**
+> forcément la bonne pour toi. En cas de doute : `ss -tnp | grep :22` sur le robot
+> montre l'IP source de ta session SSH — utilise l'adresse du robot sur ce réseau-là.
+
+Le dashboard va chercher les données via `G1_ROBOT_URL`, dont le défaut
+(`http://192.168.123.164:8000`) convient tant qu'il tourne **sur le robot** ou sur un PC
+relié en eth0. Il n'y a à le surcharger que si le robot n'est joignable que par le Wi-Fi :
+
+```bash
+G1_ROBOT_URL="http://<IP-wlan0-du-robot>:8000" bash scripts/lancer_dashboard.sh
+```
+
+**Arrêt :** `pkill -f "streamlit run"`.
+
+**Les données brutes sans passer par le dashboard** — `main.py` sert le journal de
+télémétrie complet en téléchargement :
+
+```text
+http://192.168.123.164:8000/api/export-logs   →  analytics_events_<date>.jsonl
+```
+
+C'est la source qu'utilise le dashboard lui-même. Une ligne JSON par événement
+(question, tool, note, appel, alerte, santé) — anonyme, voir [STATISTIQUES.md](STATISTIQUES.md).
+
+> ℹ️ L'ancien dashboard `/admin` (Chart.js, servi par la tablette) **a été supprimé**,
+> ainsi que le rapport HTML autonome. Le dashboard Streamlit les remplace tous les deux.
+>
 > ⚠️ `dashboard_stats.py` ≠ `dashboard.py` : ce dernier est le **superviseur ESP32**
 > (Flask, port 8888, lancé au boot), à ne pas confondre.
 
@@ -113,32 +153,106 @@ GOOGLE_MAPS_API_KEY=    # lieux / itinéraires
 AIRLABS_API_KEY=        # vols temps réel
 SPOTIFY_CLIENT_ID=      # musique
 SPOTIFY_CLIENT_SECRET=
+DAILY_API_KEY=          # appel d'assistance (salon Daily.co) — aujourd'hui dans ~/.env
+ASSIST_AUDIO=robot      # 'robot' (défaut) ou 'tablette' — voir ASSISTANCE.md
 ```
+
+> `config.py` charge le `.env` du repo **puis** `~/.env` : les deux emplacements
+> fonctionnent, mais en cas de doublon **c'est celui du repo qui gagne** (`load_dotenv`
+> n'écrase pas une variable déjà chargée). `DAILY_API_KEY` vit aujourd'hui dans `~/.env`.
 
 ### Mode d'accueil
 
-Le personnage et les tools exposés dépendent du prompt actif, à basculer en bas de `config.py` :
+Le personnage et les tools mis en avant dans le prompt dépendent du mode choisi **au
+lancement**, via `--mode` :
 
-| Mode | Variable | Usage |
-|------|----------|-------|
-| **I-Interim** | `SYSTEM_PROMPT_IINTERIM` | Accueil agence intérim — prise de RDV, agenda, Gmail, transport IDF |
-| **CDG** | `SYSTEM_PROMPT_CDG` | Accueil Terminal 2F CDG — vols temps réel, Google Maps, transport IDF |
+| Mode | Flag | Usage |
+|------|------|-------|
+| **I-Interim** | `--mode iinterim` | Accueil agence intérim — agenda (RDV déjà pris), prise de RDV en self-service (QR Google Calendar), formations/badges CORSUR, Gmail, transport IDF |
+| **CDG** | `--mode cdg` | Accueil Terminal 2F CDG — vols temps réel, Google Maps, transport IDF |
+
+Sans `--mode`, `main.py` retombe sur `_DEFAULT_MODE` codé en bas de `config.py`
+(aujourd'hui `"cdg"`) — modifiable directement si tu préfères ne jamais avoir à passer le
+flag sur ce robot.
 
 ---
 
 ## Lancement
 
+### Le robot (mode en service aujourd'hui — manuel)
+
 ```bash
-cd /home/unitree/unitree_sdk2_python && python3.8 /home/unitree/g1_agent_interim/main.py
+conda deactivate                       # si un env conda est actif — main.py veut le 3.8 SYSTÈME
+cd /home/unitree/unitree_sdk2_python && python3.8 /home/unitree/g1_agent_interim/main.py --mode cdg
 ```
+
+`--mode cdg` ou `--mode iinterim` choisit le personnage actif (voir § Mode d'accueil
+ci-dessus) — omissible, `main.py` retombe alors sur `_DEFAULT_MODE` dans `config.py`.
 
 > **Le répertoire de travail doit être `/home/unitree/unitree_sdk2_python`.** Le SDK Unitree initialise la couche DDS avec des chemins relatifs à ce dossier et lie l'interface `eth0` vers le robot ; lancé ailleurs, la connexion au robot échoue silencieusement.
 
-`main.py` fait tout le reste : init hardware (micro, HP, bras), démarrage supervisé des sous-processus vision, connexion OpenAI, boucles asyncio. Un sous-processus qui crashe est relancé automatiquement.
+`main.py` fait tout le reste : init hardware (micro, HP, bras, LED), serveur de la
+tablette sur le port 8000, démarrage supervisé des sous-processus vision, connexion
+OpenAI, boucles asyncio. Un sous-processus qui crashe est relancé automatiquement, et la
+WebSocket OpenAI se reconnecte seule (backoff 2→30 s).
 
-Pour piloter en plus la bouche/émotions via l'ESP32 (couche optionnelle) :
+Au démarrage, la console affiche le lien de l'écran :
+`[TABLETTE] Ouvre ce lien pour voir l'écran : http://<ip>:8000`.
+
+**Arrêt :** `Ctrl+C`. Si un `main.py` fantôme tient encore le port 8000 :
+`pkill -f g1_agent_interim/main.py`.
+
+### Vérifier que la tablette suit
 
 ```bash
-cd /home/unitree/unitree_sdk2_python && python3.8 /home/unitree/g1_agent_interim/launch.py
+adb devices                 # 0123456789ABCDEF   device
+adb reverse --list          # UsbFfs tcp:8000 tcp:8000
+curl -s localhost:8000/ping # {"ok":true}
+```
+
+Détails, pannes et évolutions : **[TABLETTE.md](TABLETTE.md)**.
+
+### Les deux autres modes de démarrage
+
+Ils tiennent tous les deux le **port 8000** : n'en activer **qu'un seul à la fois**, sinon
+`Address already in use`.
+
+**Launcher** — affiche une page « Démarrer » sur la tablette tant que `main.py` ne tourne
+pas, et le lance d'un tap (`launcher_server.py`). Le service est **déjà installé sur le
+robot**, simplement désactivé :
+
+```bash
+sudo systemctl enable --now g1-launcher    # activer
+sudo systemctl disable --now g1-launcher   # revenir au mode manuel
+
+# sur une machine neuve, installer d'abord l'unité :
+sudo cp scripts/g1-launcher.service /etc/systemd/system/ && sudo systemctl daemon-reload
+```
+
+**Auto-start** — `main.py` démarré au boot par systemd et relancé s'il plante (installe
+aussi la synchro NTP, indispensable au TLS, et désactive le launcher) :
+
+```bash
+bash scripts/installer_autostart.sh     # une seule fois, demande le sudo
+
+systemctl status g1-main                # état
+journalctl -u g1-main -f                # logs
+sudo systemctl restart g1-main          # redémarrer
+sudo systemctl disable --now g1-main    # revenir au mode manuel
+```
+
+### Services annexes
+
+| Service | Rôle | État |
+|---------|------|------|
+| `adb-reverse-tablet` | Maintient le tunnel USB vers la tablette (port 8000) | actif au boot |
+| `g1-dashboard` | Superviseur ESP32 `dashboard.py` (Flask, port 8888) | actif au boot |
+| `g1-launcher` | Page « Démarrer » (port 8000) | installé, désactivé |
+| `g1-main` | `main.py` au boot (port 8000) | fichier fourni, **non installé** |
+
+```bash
+for s in adb-reverse-tablet g1-dashboard g1-launcher g1-main; do
+  printf "%-22s %s / %s\n" "$s" "$(systemctl is-enabled $s 2>&1)" "$(systemctl is-active $s 2>&1)"
+done
 ```
 

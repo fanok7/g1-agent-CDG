@@ -25,14 +25,14 @@ from ultralytics import YOLO
 
 # ── Config ───────────────────────────────────────────────────────────────────
 CONF_MIN    = 0.50
-SKIP        = 3
-BUF_LEN     = 8    # frames pour stabiliser le geste
+SKIP        = 1
+BUF_LEN     = 4    # frames pour stabiliser le geste
 
 # Mapping anglais → français (insensible à la casse)
 FR = {"rock": "pierre", "paper": "feuille", "scissors": "ciseaux"}
 
 class RPSVision:
-    def __init__(self, model_path="yolo11-rps-detection.pt", source=0,
+    def __init__(self, model_path="rps_v2.engine", source=0,
                  conf=CONF_MIN):
         self.model_path    = model_path
         self.source        = source

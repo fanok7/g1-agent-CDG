@@ -1,6 +1,6 @@
 import json
 import websockets
-from config import REALTIME_URL, OPENAI_API_KEY, VOICE, SYSTEM_PROMPT
+from config import (REALTIME_URL, OPENAI_API_KEY, VOICE, SYSTEM_PROMPT, TRANSLATE_MODE)
 from tools.registry import get_schemas
 from tools.datetime_tool import date_heure_fr
 
@@ -29,6 +29,7 @@ async def connect():
     )
 
     schemas = get_schemas()
+    tools = [] if TRANSLATE_MODE else schemas
     await ws.send(json.dumps({
         'type': 'session.update',
         'session': {
@@ -46,7 +47,11 @@ async def connect():
                     'turn_detection': {
                         'type': 'semantic_vad',
                         'interrupt_response': True,
-                        'create_response': True,
+                        # En mode interprète (daneel), la réponse n'est PAS auto :
+                        # events.py injecte l'instruction de traduction puis envoie
+                        # response.create lui-même. Sinon la réponse part avant
+                        # l'instruction et le modèle répond dans la mauvaise langue.
+                        'create_response': not TRANSLATE_MODE,
                         'eagerness': 'medium',
                     },
                 },
@@ -55,9 +60,9 @@ async def connect():
                     'voice': VOICE,
                 },
             },
-            'tools': schemas,
+            'tools': tools,
             'tool_choice': 'auto',
         }
     }))
-    print(f'[AGENT] Session configurée — {len(schemas)} tool(s) actif(s)')
+    print(f'[AGENT] Session configurée — {len(tools)} tool(s) actif(s)')
     return ws

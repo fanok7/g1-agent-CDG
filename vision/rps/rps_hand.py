@@ -21,8 +21,8 @@ from pymodbus.client import ModbusTcpClient
 
 # ── Config ───────────────────────────────────────────────────────────────────
 HANDS_CONFIG = {
-    "r": {"ip": "192.168.123.210", "name": "droite"},
-    "l": {"ip": "192.168.123.211", "name": "gauche"},
+    "r": {"ip": "192.168.123.211", "name": "droite"},
+    "l": {"ip": "192.168.123.210", "name": "gauche"},
 }
 PORT          = 6000
 DEVICE_ID     = 1

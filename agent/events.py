@@ -20,6 +20,10 @@ try:
 except Exception:
     _TABLET_AVAILABLE = False
 
+import config as _config
+# Mode interprète (Daneel) : chaque phrase fr/zh est traduite dans l'autre langue.
+TRANSLATE_MODE = _config.TRANSLATE_MODE
+
 _RESPONDING_FLAG  = "/tmp/agent_responding"
 # Verrou d'appel d'assistance : tant qu'il existe, l'IA n'écoute plus (micro non
 # envoyé) et ne parle plus (audio non joué) — un humain gère l'échange.
@@ -182,7 +186,72 @@ def _detect_lang(text):
 # Nom lisible de la langue, pour l'instruction injectée au modèle.
 _LANG_NAMES = {'fr': 'français', 'en': 'anglais', 'es': 'espagnol', 'de': 'allemand',
                'it': 'italien', 'ar': 'arabe', 'zh': 'chinois', 'ja': 'japonais'}
+
+
+def _translation_target(lang):
+    """Langue cible de l'interprète (mode daneel) : chinois→français,
+    français→chinois. Langue NON détectée → on suppose un locuteur francophone
+    → cible chinois (évite la réponse en français par défaut). Autre langue
+    (en/es/de...) → None (conversation normale, le modèle s'adapte)."""
+    if not TRANSLATE_MODE:
+        return None
+    if lang == 'zh':
+        return 'fr'
+    if lang in ('fr', None):
+        return 'zh'
+    return None
+
+
+def _in_wrong_lang(out_text, tgt):
+    """Garde-fou interprète : la réponse en cours est-elle dans la mauvaise
+    langue (celle d'entrée au lieu de la cible) ?
+    Robustesse : le chinois = idéogrammes. Cible=fr → tout idéogramme est un
+    échec. Cible=zh → aucun idéogramme = pas du chinois : échec dès qu'on a
+    assez de texte (ou qu'une vraie langue est détectée) — mais on attend
+    l'idéogramme si le début n'est qu'un nom de marque latin (« Monoprix 是的 »)."""
+    has_cjk = bool(re.search(r'[一-鿿]', out_text))
+    if tgt == 'fr':
+        return has_cjk
+    if not has_cjk:
+        olang = _detect_lang(out_text)
+        if olang not in (None, 'zh'):
+            return True
+        return len(out_text.strip()) >= 12
+    return False
+
+
+async def _interpreter_response(ws, text):
+    """Déclenche une réponse interprète pour un texte donné (voix ou clavier) :
+    response.create AVEC l'instruction de traduction (éphémère, PAS injectée dans
+    l'historique — une injection en français polluerait le contexte et ferait
+    répondre le modèle en français). Sans cette instruction (create_response=False),
+    le modèle "mini" répondrait dans la langue d'entrée au lieu de traduire.
+    Autre langue (ex. anglais) → réponse normale dans sa langue."""
+    lang = _detect_lang(text)
+    tgt = _translation_target(lang)
+    if tgt:
+        globals()['_last_detected_lang'] = lang
+        globals()['_turn_src'] = lang
+        globals()['_turn_tgt'] = tgt
+        globals()['_turn_retried'] = 0
+        nom_src = _LANG_NAMES.get(lang, lang)
+        nom_tgt = _LANG_NAMES.get(tgt, tgt)
+        await ws.send(json.dumps({
+            'type': 'response.create',
+            'response': {'instructions':
+                f"INTERPRÈTE — l'interlocuteur vient de parler en {nom_src}. "
+                f"Traduis son message en {nom_tgt} UNIQUEMENT : la traduction seule, "
+                f"fidèle et complète, sans commentaire, sans question, et JAMAIS en {nom_src}."},
+        }))
+    else:
+        await ws.send(json.dumps({'type': 'response.create'}))
+
+
 _last_detected_lang = None   # pour n'injecter l'instruction qu'au CHANGEMENT de langue
+_turn_src = None             # interprète : langue d'entrée du tour courant
+_turn_tgt = None             # interprète : langue cible du tour courant (garde-fou)
+_turn_retried = 0            # nombre de regénérations du tour (max 1), interprète ET mode normal
+_turn_user_lang = None       # langue détectée du tour courant (garde-fou hors interprète)
 _last_user_text = ""         # dernière phrase du visiteur → motif de l'écran d'assistance
 _assist_confirm_shown = False  # évite de réafficher l'écran d'assistance en boucle
 _q_start = None              # horodatage de la question en cours (mesure de latence)
@@ -346,12 +415,12 @@ async def receive_events_loop(ws):
                 globals()['_fallback_turn'] = False
             if transcript and _TABLET_AVAILABLE:
                 push_chat("user", transcript)
-                # L'interface suit la langue RÉELLEMENT parlée par le visiteur.
                 _lang = _detect_lang(transcript)
+                globals()['_turn_retried'] = 0
                 if _lang:
-                    # Canal PRIORITAIRE : suit la voix. On pousse à chaque phrase
-                    # détectée — la tablette ignore si c'est déjà la langue courante
-                    # (setLang no-op) → pas de flicker, et pas d'état périmé après reset.
+                    globals()['_turn_user_lang'] = _lang
+                if _lang and not TRANSLATE_MODE:
+                    # Accueil classique : l'interface suit la langue parlée.
                     push_lang_user(_lang)
                     # Le modèle s'accroche parfois à la langue précédente : on lui
                     # force la bascule par une instruction interne (sans déclencher
@@ -370,6 +439,14 @@ async def receive_events_loop(ws):
                 if not responding:   # pas d'overlay "Réflexion" si le robot parle déjà
                     push_status("reflechit")
 
+            # ── INTERPRÈTE (daneel) : déclenchement manuel de la réponse ──────
+            # create_response=False (session.py) : c'est NOUS qui envoyons
+            # response.create, une fois la transcription arrivée, avec l'instruction
+            # de traduction. Sans ça, le modèle "mini" répondrait dans la langue
+            # d'entrée. L'interface tablette reste en français (équipe locale).
+            if TRANSLATE_MODE and transcript:
+                await _interpreter_response(ws, transcript)
+
         elif t == 'response.output_audio.delta':
             audio_buf.extend(base64.b64decode(e['delta']))
             if not responding:
@@ -384,6 +461,57 @@ async def receive_events_loop(ws):
 
         elif t == 'response.output_audio_transcript.delta':
             text_buf += e.get('delta', '')
+            # ── Garde-fou de langue (interprète daneel) ──
+            # Le modèle "mini" sort parfois du rôle et répond dans la langue
+            # d'entrée (ex. français → français). On le détecte dès que le
+            # transcript de sortie est dans la mauvaise langue, on annule la
+            # réponse et on régénère avec une instruction plus dure (1 retry
+            # max par tour). Détection robuste via _detect_lang (idéogrammes).
+            if TRANSLATE_MODE and _turn_tgt and _turn_retried == 0 \
+                    and len(text_buf.strip()) >= 3 and _in_wrong_lang(text_buf, _turn_tgt):
+                globals()['_turn_retried'] = 1
+                _nom_src = _LANG_NAMES.get(_turn_src or 'fr', 'fr')
+                _nom_tgt = _LANG_NAMES.get(_turn_tgt, _turn_tgt)
+                print(f'[G1] Réponse en langue source ({_nom_src}) — regénération ({_nom_tgt}).')
+                responding = False
+                _set_responding(False)
+                audio_buf.clear()
+                text_buf = ''
+                await ws.send(json.dumps({'type': 'response.cancel'}))
+                await ws.send(json.dumps({
+                    'type': 'response.create',
+                    'response': {'instructions':
+                        f"ERREUR DE LANGUE DÉTECTÉE — tu as commencé à répondre en {_nom_src} "
+                        f"au lieu de {_nom_tgt}. Recommence : traduis UNIQUEMENT en {_nom_tgt}, "
+                        f"fidèle et complet, sans préambule, sans commentaire, sans question. "
+                        f"Ne commence JAMAIS en {_nom_src}."},
+                }))
+
+            # ── Même garde-fou, hors mode interprète ──
+            # Le modèle "mini" dévie parfois spontanément de langue (ex. répond
+            # en espagnol à une question en français) sans que la détection
+            # d'entrée n'ait pu le prévoir. On compare la langue du texte en
+            # cours de génération à celle du tour utilisateur ; en cas de
+            # désaccord net, on annule et on régénère avec une instruction
+            # dure (1 retry max par tour, comme l'interprète).
+            elif not TRANSLATE_MODE and _turn_user_lang and _turn_retried == 0 \
+                    and len(text_buf.strip()) >= 15:
+                _out_lang = _detect_lang(text_buf)
+                if _out_lang and _out_lang != _turn_user_lang:
+                    globals()['_turn_retried'] = 1
+                    _nom = _LANG_NAMES.get(_turn_user_lang, _turn_user_lang)
+                    print(f'[G1] Réponse en mauvaise langue ({_out_lang}) — regénération ({_nom}).')
+                    responding = False
+                    _set_responding(False)
+                    audio_buf.clear()
+                    text_buf = ''
+                    await ws.send(json.dumps({'type': 'response.cancel'}))
+                    await ws.send(json.dumps({
+                        'type': 'response.create',
+                        'response': {'instructions':
+                            f"ERREUR DE LANGUE DÉTECTÉE — recommence ta réponse UNIQUEMENT en "
+                            f"{_nom}, c'est la langue que l'interlocuteur vient de parler."},
+                    }))
 
         elif t == 'response.output_audio.done':
             if os.path.exists(_AI_PAUSED_FLAG):
@@ -411,10 +539,13 @@ async def receive_events_loop(ws):
                     globals()['_q_start'] = None
                 if text_buf and _TABLET_AVAILABLE:
                     push_chat("assistant", text_buf)
-                    # Le robot propose de contacter un humain mais le modèle "mini"
-                    # oublie souvent d'appeler le tool → on affiche l'écran de
-                    # confirmation par le CODE. Skip si un appel est déjà en cours.
-                    if _proposes_assistance(text_buf) and not os.path.exists(_AI_PAUSED_FLAG):
+                    # Réflexes du mode accueil (assistance / boutons / gestes) —
+                    # inutiles et parasites pour un interprète : désactivés en
+                    # mode traduction (daneel). Les sous-titres (push_chat) eux
+                    # restent actifs : phrase originale + traduction à l'écran.
+                    if TRANSLATE_MODE:
+                        push_choices([])
+                    elif _proposes_assistance(text_buf) and not os.path.exists(_AI_PAUSED_FLAG):
                         if not _assist_confirm_shown:
                             globals()['_assist_confirm_shown'] = True
                             push_assist_confirm({
@@ -438,7 +569,8 @@ async def receive_events_loop(ws):
                             # efface les boutons d'un tour précédent pour qu'ils
                             # ne traînent/réapparaissent pas au rechargement.
                             push_choices([])
-                _maybe_reflex_gesture(text_buf)   # salut/applaudissements auto par le code
+                if not TRANSLATE_MODE:
+                    _maybe_reflex_gesture(text_buf)   # salut/applaudissements auto par le code
                 if rps_go_pending:
                     dur = len(audio_buf) / 2 / 24000.0
                     threading.Timer(max(0.0, dur - _RPS_GO_LEAD),
@@ -461,6 +593,8 @@ async def receive_events_loop(ws):
                 print('[G1] Écoute...')
 
         elif t == 'response.done':
+            globals()['_turn_tgt'] = None   # garde-fou interprète : tour terminé
+            globals()['_turn_retried'] = 0  # garde-fou langue : prêt pour le tour suivant
             # Ne pas retirer le flag si l'audio est encore en lecture :
             # play_audio dans l'executor s'en charge quand il termine.
             if not _audio_playing:
@@ -626,7 +760,11 @@ async def text_input_loop(ws):
                 'content': [{'type': 'input_text', 'text': text}],
             }
         }))
-        await ws.send(json.dumps({'type': 'response.create'}))
+        if TRANSLATE_MODE:
+            # Interprète : même déclenchement que pour la voix (traduction fr↔zh).
+            await _interpreter_response(ws, text)
+        else:
+            await ws.send(json.dumps({'type': 'response.create'}))
 
 
 async def fall_alert_loop(ws):
@@ -813,6 +951,11 @@ async def face_greeting_loop(ws):
     UNKNOWN_FORGET_SEC    = 6000.0  # oublier un inconnu après 10 min (resaluer s'il revient)
     CONFIRM_FRAMES        = 3      # frames consécutives avant de saluer
     INCONNU_COOLDOWN      = 25.0  # cooldown post-conversation uniquement
+
+    if TRANSLATE_MODE:
+        # Interprète (daneel) : pas de salutation proactive pendant la visio —
+        # un "Bonjour Jean !" en pleine traduction couperait l'échange.
+        return
 
     for _ in range(30):
         if os.path.exists(_FACE_STATE_FILE):

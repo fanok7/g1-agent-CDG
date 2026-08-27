@@ -15,6 +15,8 @@ Usage :
     hand.disconnect()
 """
 
+from __future__ import annotations
+
 import struct
 import logging
 from pymodbus.client import ModbusTcpClient

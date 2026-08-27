@@ -55,6 +55,11 @@ _mic_dev = None            # micro virtuel alimenté par push_mic()
 _spk_dev = None            # haut-parleur virtuel lu par _speaker_loop
 _actif = False
 _parle_jusqua = 0.0        # instant jusqu'auquel on considère le distant actif
+# Daily.init() + les périphériques virtuels doivent être créés UNE SEULE FOIS par
+# processus. Un 2e appel à Daily.init() panique en Rust ("Execution context already
+# exists!") de façon NON RATTRAPABLE (abort → crash de main.py). On garde donc
+# Daily initialisé pour toute la vie du process et on réutilise les périphériques.
+_daily_ready = False
 
 
 def est_actif():
@@ -181,19 +186,30 @@ def demarrer(url):
     class _Handler(EventHandler):
         def on_participant_joined(self, participant):
             print("[CALL-AUDIO] Le responsable a rejoint l'appel.", flush=True)
+            # Prévient la tablette → passe de "en attente" à "communication établie".
+            try:
+                from tablet_server.server import push_call_status
+                push_call_status("connected")
+            except Exception:
+                pass
 
         def on_participant_left(self, participant, reason=None):
             _sur_depart(reason)
 
     try:
-        Daily.init()
-        # Périphériques VIRTUELS : daily-python ne touche pas au matériel, c'est
-        # nous qui poussons/tirons les échantillons.
-        _mic_dev = Daily.create_microphone_device(
-            "g1-mic", sample_rate=MIC_RATE, channels=1, non_blocking=True)
-        _spk_dev = Daily.create_speaker_device(
-            "g1-spk", sample_rate=SPK_RATE, channels=1)
-        Daily.select_speaker_device("g1-spk")
+        global _daily_ready
+        # Daily.init() + périphériques : UNE SEULE FOIS par processus (sinon panic
+        # non rattrapable → crash). Ensuite on réutilise les mêmes périphériques.
+        if not _daily_ready:
+            Daily.init()
+            # Périphériques VIRTUELS : daily-python ne touche pas au matériel, c'est
+            # nous qui poussons/tirons les échantillons.
+            _mic_dev = Daily.create_microphone_device(
+                "g1-mic", sample_rate=MIC_RATE, channels=1, non_blocking=True)
+            _spk_dev = Daily.create_speaker_device(
+                "g1-spk", sample_rate=SPK_RATE, channels=1)
+            Daily.select_speaker_device("g1-spk")
+            _daily_ready = True
 
         _client = CallClient(event_handler=_Handler())
         _client.update_inputs({
@@ -215,8 +231,9 @@ def demarrer(url):
 
 
 def arreter():
-    """Quitte le salon et libère le haut-parleur."""
-    global _client, _mic_dev, _spk_dev, _actif
+    """Quitte le salon et libère le CallClient. On GARDE Daily initialisé et les
+    périphériques virtuels (réutilisés au prochain appel) — les recréer paniquerait."""
+    global _client, _actif
     if not _actif and _client is None:
         return
     _actif = False              # arrête _speaker_loop
@@ -228,6 +245,5 @@ def arreter():
     except Exception as e:
         print("[CALL-AUDIO] leave : {}".format(e), flush=True)
     _client = None
-    _mic_dev = None
-    _spk_dev = None
+    # _mic_dev / _spk_dev conservés (une seule création par processus, voir demarrer).
     print("[CALL-AUDIO] Appel terminé côté robot.", flush=True)

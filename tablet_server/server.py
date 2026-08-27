@@ -111,6 +111,14 @@ async def index(request: Request):
     )
 
 
+@app.get("/ping")
+async def ping():
+    """Sonde de disponibilité, appelée en boucle par la tablette. Si main.py
+    s'arrête, ce ping échoue (connexion refusée) → la tablette recharge et
+    affiche « page introuvable » au lieu d'une interface figée."""
+    return {"ok": True}
+
+
 @app.get("/events")
 async def events():
     """Flux SSE : chaque nouvel état (affichage, statut, choix, chat) est
@@ -128,6 +136,8 @@ async def events():
             yield f"data: {json.dumps({'choices': _current_choices})}\n\n"
             if _current_call:   # appel en cours → la tablette le rejoint au (re)chargement
                 yield f"data: {json.dumps({'call': _current_call})}\n\n"
+                if _current_call_status:   # + son état (attente / communication établie)
+                    yield f"data: {json.dumps({'call_status': _current_call_status})}\n\n"
             elif _pending_confirm:   # avertissement vocal en attente → réaffiché si la page recharge
                 yield f"data: {json.dumps({'assist_confirm': _pending_confirm})}\n\n"
             while True:
@@ -341,15 +351,26 @@ def push_assist_confirm(info):
 
 
 _call_started_at = None   # horodatage du début de l'appel courant (durée télémétrie)
+_current_call_status = None  # 'waiting' | 'connected' | None — état affiché sur la tablette
 
 
 def push_call(info):
     """Bascule la tablette en mode APPEL : elle affiche l'écran "Appel en cours"
     et rejoint le salon Jitsi en audio. `info` = {room, url, motif}."""
-    global _current_call, _call_started_at
+    global _current_call, _call_started_at, _current_call_status
     _current_call = info
     _call_started_at = _time_module.time()
+    _current_call_status = "waiting"   # au départ : en attente du responsable
     _broadcast({"call": info})
+
+
+def push_call_status(status):
+    """Met à jour l'état de l'appel affiché : 'waiting' (personne n'a décroché) ou
+    'connected' (le responsable a rejoint). Appelée par robot/call_audio.py quand
+    un participant arrive dans le salon."""
+    global _current_call_status
+    _current_call_status = status
+    _broadcast({"call_status": status})
 
 
 def push_call_end():
@@ -367,8 +388,10 @@ def push_call_end():
                                answered=bool(duree >= 5), duration_s=duree)
         except Exception:
             pass
+    global _current_call_status
     _call_started_at = None
     _current_call = None
+    _current_call_status = None
     _broadcast({"call_end": True})
 
 

@@ -207,6 +207,13 @@
   #call-view { flex-direction: column; align-items: center; justify-content: center; gap: clamp(14px, 2.2vh, 24px); text-align: center; }
   #call-view .call-halo { position: relative; width: clamp(96px, 15vh, 140px); height: clamp(96px, 15vh, 140px); display: flex; align-items: center; justify-content: center; }
   #call-view .call-halo::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 3px solid var(--state-speak); opacity: 0; animation: halo-ring 1.8s ease-out infinite; }
+  /* En attente (sonnerie) : halo orange qui pulse plus vite. Connecté : vert calme. */
+  #call-view.waiting .call-halo::before { border-color: var(--state-think); animation-duration: 1.1s; }
+  #call-view.waiting .call-core { background: linear-gradient(135deg, #F59E0B, #FBBF24); }
+  #call-view.waiting .call-title { color: var(--state-think); }
+  #call-view.connected .call-halo::before { border-color: var(--state-speak); }
+  #call-view.connected .call-core { background: linear-gradient(135deg, #17A673, #34D399); }
+  #call-view.connected .call-title { color: var(--state-speak); }
   #call-view .call-core {
     width: 62%; height: 62%; border-radius: 50%; background: linear-gradient(135deg, #17A673, #0f7d56);
     display: flex; align-items: center; justify-content: center; font-size: clamp(2rem, 5vh, 3rem);
@@ -296,6 +303,29 @@
   }
   #plan-view img#plan-qr { width: clamp(130px, 18vmin, 220px); height: clamp(130px, 18vmin, 220px); image-rendering: pixelated; border-radius: 10px; background:#fff; }
   #plan-view .plan-caption { font-size: 0.9rem; color: var(--text-secondary); max-width: 22vmin; text-align: center; line-height: 1.4; }
+
+  /* ── Saisie tactile (clavier structuré) ── */
+  #input-view { flex-direction: column; align-items: center; justify-content: center; gap: clamp(14px, 2.4vh, 24px); width: 100%; height: 100%; }
+  #input-view h1 { font-size: clamp(1.4rem, 3.6vh, 2.1rem); margin: 0; color: var(--accent); text-align: center; }
+  .input-form { display: flex; flex-direction: column; align-items: center; gap: clamp(14px, 2vh, 20px); width: min(92%, 560px); }
+  .input-form #input-fields { display: flex; flex-direction: column; gap: clamp(12px, 1.8vh, 18px); width: 100%; }
+  .input-field { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+  .input-field label { font-size: clamp(0.9rem, 1.9vh, 1.05rem); font-weight: 700; color: var(--text-secondary); }
+  .input-field input {
+    font-family: inherit; font-size: clamp(1.1rem, 2.6vh, 1.4rem); font-weight: 500;
+    padding: clamp(12px, 1.8vh, 18px) clamp(16px, 2vw, 22px); border-radius: 16px;
+    border: 2px solid var(--card-border); background: var(--bg-1); color: var(--text-primary);
+    outline: none; transition: border-color .15s ease;
+  }
+  .input-field input:focus { border-color: var(--accent); }
+  #input-submit {
+    font-family: inherit; font-size: clamp(1.05rem, 2.4vh, 1.35rem); font-weight: 700; letter-spacing: 0.02em;
+    border: none; border-radius: 22px; padding: clamp(16px, 2.6vh, 24px) clamp(30px, 5vw, 52px); cursor: pointer;
+    background: linear-gradient(135deg, #7B2CBF, #9D4EDD); color: var(--white);
+    box-shadow: 0 14px 30px rgba(123,44,191,.30); min-width: 150px;
+    transition: transform .1s ease, box-shadow .1s ease;
+  }
+  #input-submit:active { transform: scale(0.95); box-shadow: 0 6px 16px rgba(123,44,191,.28); }
 
   /* ── Boutons tactiles dynamiques ── */
   #choice-buttons { display: none; gap: clamp(14px, 2vw, 22px); justify-content: center; flex-wrap: wrap; flex-shrink: 0; }
@@ -408,10 +438,10 @@
       <div id="main-card">
         <div id="chat-view" class="card-view"></div>
         <div id="call-view" class="card-view">
-          <div class="call-halo"><div class="call-core">📞</div></div>
-          <p class="call-title">Appel en cours…</p>
+          <div class="call-halo"><div class="call-core" id="call-icon">📞</div></div>
+          <p class="call-title" id="call-title">En attente d'un responsable…</p>
           <p class="call-sub" id="call-motif"></p>
-          <p class="call-hint">Un responsable vous répond — parlez normalement.</p>
+          <p class="call-hint" id="call-hint">Ne quittez pas, un agent va vous répondre.</p>
           <button id="call-hangup" type="button">✖ Raccrocher</button>
           <div id="call-audio"></div>
         </div>
@@ -452,6 +482,13 @@
               <div class="plan-caption">Scannez pour ouvrir l'itinéraire dans Google Maps sur votre téléphone</div>
             </div>
           </div>
+        </div>
+        <div id="input-view" class="card-view">
+          <h1 id="input-titre"></h1>
+          <form id="input-form" class="input-form">
+            <div id="input-fields"></div>
+            <button type="submit" id="input-submit"></button>
+          </form>
         </div>
       </div>
 
@@ -498,6 +535,7 @@ const qrView    = document.getElementById('qr-view');
 const planView  = document.getElementById('plan-view');
 const chatView  = document.getElementById('chat-view');
 const callView  = document.getElementById('call-view');
+const inputView = document.getElementById('input-view');
 const statusEl  = document.getElementById('status');
 const aiStatusEl = document.getElementById('ai-status');
 const aiLabelEl  = document.getElementById('ai-label');
@@ -512,49 +550,57 @@ const I18N = {
         idleSub:'Posez-moi votre question à voix haute',
         captionEmpty:'La conversation apparaîtra ici.', ratingLabel:'Votre avis :',
         merci:'Merci ! ✔️', qrText:'Scannez pour enregistrer cette liste dans vos notes',
-        qrPlan:"Scannez pour ouvrir l'itinéraire dans Google Maps sur votre téléphone" },
+        qrPlan:"Scannez pour ouvrir l'itinéraire dans Google Maps sur votre téléphone",
+        valider:'Valider' },
   en: { ecoute:'Listening...', reflechit:'Thinking...', parle:'Speaking...',
         headerTitle:'Assistant robot', idleTitle:"Hello! I'm listening",
         idleSub:'Ask me your question out loud',
         captionEmpty:'The conversation will appear here.', ratingLabel:'Your feedback:',
         merci:'Thank you! ✔️', qrText:'Scan to save this list to your notes',
-        qrPlan:'Scan to open the route in Google Maps on your phone' },
+        qrPlan:'Scan to open the route in Google Maps on your phone',
+        valider:'Submit' },
   es: { ecoute:'Escuchando...', reflechit:'Pensando...', parle:'Hablando...',
         headerTitle:'Robot asistente', idleTitle:'¡Hola! Le escucho',
         idleSub:'Hágame su pregunta en voz alta',
         captionEmpty:'La conversación aparecerá aquí.', ratingLabel:'Su opinión:',
         merci:'¡Gracias! ✔️', qrText:'Escanee para guardar esta lista en sus notas',
-        qrPlan:'Escanee para abrir la ruta en Google Maps en su teléfono' },
+        qrPlan:'Escanee para abrir la ruta en Google Maps en su teléfono',
+        valider:'Enviar' },
   de: { ecoute:'Höre zu...', reflechit:'Denke nach...', parle:'Spreche...',
         headerTitle:'Assistenzroboter', idleTitle:'Hallo! Ich höre zu',
         idleSub:'Stellen Sie Ihre Frage laut',
         captionEmpty:'Das Gespräch erscheint hier.', ratingLabel:'Ihre Meinung:',
         merci:'Danke! ✔️', qrText:'Scannen, um diese Liste in Ihren Notizen zu speichern',
-        qrPlan:'Scannen, um die Route in Google Maps auf Ihrem Handy zu öffnen' },
+        qrPlan:'Scannen, um die Route in Google Maps auf Ihrem Handy zu öffnen',
+        valider:'Bestätigen' },
   it: { ecoute:'In ascolto...', reflechit:'Sto pensando...', parle:'Sto parlando...',
         headerTitle:'Robot assistente', idleTitle:'Ciao! Ti ascolto',
         idleSub:'Fammi la tua domanda ad alta voce',
         captionEmpty:'La conversazione apparirà qui.', ratingLabel:'La tua opinione:',
         merci:'Grazie! ✔️', qrText:'Scansiona per salvare questa lista nelle tue note',
-        qrPlan:'Scansiona per aprire il percorso in Google Maps sul telefono' },
+        qrPlan:'Scansiona per aprire il percorso in Google Maps sul telefono',
+        valider:'Conferma' },
   ar: { ecoute:'أستمع...', reflechit:'أفكر...', parle:'أتحدث...',
         headerTitle:'روبوت مساعد', idleTitle:'مرحبا! أنا أستمع',
         idleSub:'اطرح سؤالك بصوت عالٍ',
         captionEmpty:'ستظهر المحادثة هنا.', ratingLabel:'رأيك:',
         merci:'شكرا! ✔️', qrText:'امسح لحفظ هذه القائمة في ملاحظاتك',
-        qrPlan:'امسح لفتح المسار في خرائط جوجل على هاتفك' },
+        qrPlan:'امسح لفتح المسار في خرائط جوجل على هاتفك',
+        valider:'تأكيد' },
   zh: { ecoute:'正在聆听...', reflechit:'思考中...', parle:'正在说话...',
         headerTitle:'助理机器人', idleTitle:'您好！我在听',
         idleSub:'请大声说出您的问题',
         captionEmpty:'对话将显示在这里。', ratingLabel:'您的评价：',
         merci:'谢谢！✔️', qrText:'扫描将此列表保存到您的备忘录',
-        qrPlan:'扫描以在手机的谷歌地图中打开路线' },
+        qrPlan:'扫描以在手机的谷歌地图中打开路线',
+        valider:'提交' },
   ja: { ecoute:'聞いています...', reflechit:'考えています...', parle:'話しています...',
         headerTitle:'アシスタントロボット', idleTitle:'こんにちは！お聞きします',
         idleSub:'質問を声に出してください',
         captionEmpty:'会話がここに表示されます。', ratingLabel:'ご評価：',
         merci:'ありがとうございます！✔️', qrText:'このリストをメモに保存するにはスキャン',
-        qrPlan:'スマホのGoogleマップでルートを開くにはスキャン' },
+        qrPlan:'スマホのGoogleマップでルートを開くにはスキャン',
+        valider:'送信' },
 };
 let currentLang = 'fr';
 let currentStatus = 'ecoute';
@@ -605,6 +651,16 @@ Object.assign(I18N.it, { acTitle:'Chiamare un responsabile?', acText:"Questo pul
 Object.assign(I18N.ar, { acTitle:'الاتصال بموظف؟', acText:'يوصلك هذا الزر بموظف بشري في المطار للحصول على مساعدة حقيقية: الحركة المحدودة، كرسي متحرك، حالة طارئة. استخدمه فقط عند الحاجة. سيرد عليك موظف مباشرة.', acGo:'نعم، اتصل', acCancel:'إلغاء' });
 Object.assign(I18N.zh, { acTitle:'呼叫工作人员？', acText:'此按钮将您与机场的人工客服连接，以获得真正的帮助：行动不便、轮椅、紧急情况。请仅在确实需要时使用。工作人员将实时回复您。', acGo:'是的，呼叫', acCancel:'取消' });
 Object.assign(I18N.ja, { acTitle:'係員を呼びますか？', acText:'このボタンは、移動が困難な方、車椅子、緊急時など、本当に助けが必要な場合に空港の係員につなぎます。必要な場合のみご利用ください。係員がその場で対応します。', acGo:'はい、呼ぶ', acCancel:'キャンセル' });
+
+// États de l'écran d'appel d'assistance (attente → communication établie).
+Object.assign(I18N.fr, { callWait:"En attente d'un responsable…", callWaitSub:'Ne quittez pas, un agent va vous répondre.', callOn:'Communication établie', callOnSub:'Un responsable est en ligne — parlez.' });
+Object.assign(I18N.en, { callWait:'Waiting for a staff member…', callWaitSub:'Please hold, an agent will answer.', callOn:'Connected', callOnSub:'A staff member is on the line — go ahead.' });
+Object.assign(I18N.es, { callWait:'Esperando a un responsable…', callWaitSub:'No cuelgue, un agente le responderá.', callOn:'Comunicación establecida', callOnSub:'Un responsable está en línea — hable.' });
+Object.assign(I18N.de, { callWait:'Warten auf einen Mitarbeiter…', callWaitSub:'Bitte warten, ein Agent antwortet.', callOn:'Verbindung hergestellt', callOnSub:'Ein Mitarbeiter ist dran — sprechen Sie.' });
+Object.assign(I18N.it, { callWait:'In attesa di un responsabile…', callWaitSub:'Attenda, un agente risponderà.', callOn:'Comunicazione stabilita', callOnSub:'Un responsabile è in linea — parli.' });
+Object.assign(I18N.ar, { callWait:'في انتظار مسؤول…', callWaitSub:'يرجى الانتظار، سيرد أحد الموظفين.', callOn:'تم إنشاء الاتصال', callOnSub:'المسؤول على الخط — تفضل بالتحدث.' });
+Object.assign(I18N.zh, { callWait:'正在等待工作人员…', callWaitSub:'请稍候，客服将接听。', callOn:'已接通', callOnSub:'工作人员已在线，请讲话。' });
+Object.assign(I18N.ja, { callWait:'係員をお待ちください…', callWaitSub:'少々お待ちください、担当者が対応します。', callOn:'通話中', callOnSub:'係員が対応中です。お話しください。' });
 
 // Menu d'accueil : [clé i18n, icône, phrase injectée au robot comme si dite à l'oral]
 const IDLE_MENU = [
@@ -801,9 +857,24 @@ function detacherAudio(ev) {
   });
 }
 
+// Bascule l'écran d'appel entre "en attente" (le responsable n'a pas encore
+// décroché) et "communication établie" (il a rejoint) — pour que le visiteur
+// voie quand quelqu'un est là. Multilingue.
+function setCallStatus(status) {
+  const cv = document.getElementById('call-view');
+  const t = I18N[currentLang] || I18N.fr;
+  const on = (status === 'connected');
+  cv.classList.toggle('connected', on);
+  cv.classList.toggle('waiting', !on);
+  document.getElementById('call-icon').textContent = on ? '🟢' : '📞';
+  document.getElementById('call-title').textContent = on ? t.callOn : t.callWait;
+  document.getElementById('call-hint').textContent = on ? t.callOnSub : t.callWaitSub;
+}
+
 function startCall(info) {
   document.getElementById('assist-confirm').classList.remove('on');   // l'appel démarre → plus d'avertissement
   document.getElementById('call-motif').textContent = info.motif || '';
+  setCallStatus('waiting');   // au départ : en attente que le responsable décroche
   setChoices([]);
   setViewMode('call');
   clog('Ouverture appel, salon=' + info.room);
@@ -828,8 +899,10 @@ function startCall(info) {
       });
 
       callObj.on('joined-meeting', () => clog('SALON REJOINT ✓'));
-      callObj.on('participant-joined', (e) =>
-        clog('participant arrivé: ' + (e && e.participant && e.participant.user_name)));
+      callObj.on('participant-joined', (e) => {
+        clog('participant arrivé: ' + (e && e.participant && e.participant.user_name));
+        setCallStatus('connected');   // mode audio tablette : le responsable a rejoint
+      });
       callObj.on('track-started', attacherAudio);
       callObj.on('track-stopped', detacherAudio);
       // Le responsable raccroche de son côté → le visiteur ne doit pas rester
@@ -1052,10 +1125,50 @@ function flushChoices() {
 }
 
 // Cross-fade : une seule vue active à la fois (les autres se fondent en sortie).
-const CARD_VIEWS = [idleEl, textView, qrView, planView, chatView, callView];
+const CARD_VIEWS = [idleEl, textView, qrView, planView, inputView, chatView, callView];
 function showView(el) {
   CARD_VIEWS.forEach(v => v.classList.toggle('is-active', v === el));
 }
+
+// Clavier structuré (demander_saisie) : un <input> natif par champ — le
+// clavier Android s'ouvre tout seul au focus, pas besoin d'un widget custom.
+function renderInputView(state) {
+  document.getElementById('input-titre').textContent = state.titre || '';
+  const container = document.getElementById('input-fields');
+  container.innerHTML = '';
+  (state.champs || []).forEach((label, i) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'input-field';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    lab.htmlFor = 'input-field-' + i;
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.id = 'input-field-' + i;
+    inp.autocomplete = 'off';
+    wrap.appendChild(lab);
+    wrap.appendChild(inp);
+    container.appendChild(wrap);
+  });
+  document.getElementById('input-submit').textContent = t('valider');
+  // Focus le premier champ pour ouvrir directement le clavier Android (léger
+  // délai : laisse le temps au cross-fade de vue de démarrer).
+  const first = container.querySelector('input');
+  if (first) setTimeout(() => first.focus(), 300);
+}
+
+// La saisie repart EXACTEMENT comme un tap sur un bouton (sendResponse déjà
+// défini plus haut) : le serveur ne sait rien du contenu, c'est le LLM qui
+// interprète le texte reçu, comme une réponse dite au micro.
+document.getElementById('input-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const parts = Array.from(document.querySelectorAll('#input-fields .input-field'))
+    .map(f => ({ label: f.querySelector('label').textContent, value: f.querySelector('input').value.trim() }))
+    .filter(f => f.value)
+    .map(f => `${f.label} : ${f.value}`);
+  if (parts.length === 0) return;   // rien saisi → on ignore le submit
+  sendResponse(parts.join('. ') + '.');
+});
 
 function renderContent(state) {
   if (state.type === 'text') {
@@ -1092,6 +1205,9 @@ function renderContent(state) {
     }
     document.getElementById('plan-qr').src = state.qr_url + '?t=' + Date.now();
     showView(planView);
+  } else if (state.type === 'input') {
+    renderInputView(state);
+    showView(inputView);
   } else {
     showView(idleEl);
   }
@@ -1122,10 +1238,13 @@ resetIdleTimer();
   document.addEventListener(ev, resetIdleTimer, { passive: true }));
 
 let _ignoreNextChoices = false;
+let _sseFails = 0;   // échecs de connexion SSE consécutifs (→ recharge si le serveur est durablement mort)
+
 function connect() {
   const es = new EventSource('/events');
   es.onopen = () => {
     statusEl.textContent = 'connecté';
+    _sseFails = 0;               // reconnexion réussie → on repart de zéro
     _ignoreNextChoices = true;   // ignore les boutons "restaurés" à la connexion (état serveur périmé)
   };
   es.onmessage = (e) => {
@@ -1144,6 +1263,7 @@ function connect() {
     else if (msg.status) { setAiStatus(msg.status); }
     else if (msg.assist_confirm) { showAssistConfirm(msg.assist_confirm.motif, msg.assist_confirm.langue); }  // demande vocale → écran d'avertissement
     else if (msg.call) { startCall(msg.call); }          // mise en relation humaine
+    else if (msg.call_status) { setCallStatus(msg.call_status); }  // attente → communication établie
     else if (msg.call_end) { closeCall(false); }         // le robot a mis fin à l'appel
     else if (msg.lang_user) {
       // Langue détectée dans la VOIX du visiteur → canal PRIORITAIRE : toujours
@@ -1174,10 +1294,31 @@ function connect() {
   es.onerror = () => {
     statusEl.textContent = 'reconnexion...';
     es.close();
+    _sseFails++;
+    // Serveur durablement absent (main.py arrêté) → on RECHARGE la page au lieu de
+    // laisser une interface figée non fonctionnelle. Si le serveur est toujours
+    // mort → Fully affiche "page introuvable" (et retente toutes les 3s). S'il est
+    // revenu → on récupère l'interface fraîche. ~6 échecs ≈ 6s de coupure réelle.
+    if (_sseFails >= 6) { location.reload(); return; }
     setTimeout(connect, 1000);
   };
 }
 connect();
+
+// ── Sonde active de disponibilité du serveur ────────────────────────────────
+// À travers le tunnel USB, le SSE ne détecte PAS toujours la mort du serveur
+// (connexion TCP semi-ouverte → onerror ne se déclenche pas). On PING donc
+// activement : un fetch vers un serveur mort échoue tout de suite. Après 3
+// échecs consécutifs (~12s) → on recharge. Serveur toujours mort → « page
+// introuvable » ; serveur revenu → interface fraîche.
+let _pingFails = 0;
+setInterval(() => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 3000);
+  fetch('/ping?t=' + Date.now(), { cache: 'no-store', signal: ctrl.signal })
+    .then((r) => { clearTimeout(t); if (r.ok) _pingFails = 0; else if (++_pingFails >= 3) location.reload(); })
+    .catch(() => { clearTimeout(t); if (++_pingFails >= 3) location.reload(); });
+}, 4000);
 </script>
 </body>
 </html>

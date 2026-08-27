@@ -16,8 +16,10 @@ En bref — sur le robot :
 cd /home/unitree/g1_agent_interim && bash scripts/lancer_dashboard.sh
 ```
 
-Puis, dans le navigateur du PC : **http://192.168.123.164:8501**. Les données sont
-récupérées via l'API du robot (`GET /api/export-logs`) ou lues localement.
+Puis, dans le navigateur du PC : **`http://192.168.123.164:8501`** (l'adresse du robot
+sur le réseau auquel ton PC est relié — celle-ci vaut pour le lien direct eth0, le cas
+habituel ; voir [DASHBOARD.md](DASHBOARD.md) si tu passes par le Wi-Fi). Les données
+sont récupérées via l'API du robot (`GET /api/export-logs`) ou lues localement.
 
 ---
 

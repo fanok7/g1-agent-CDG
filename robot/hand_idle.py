@@ -39,6 +39,12 @@ MODE_RIGID = {
     "speed": [900]  * N_DOF,
 }
 
+# Amplitude du mouvement idle (position 0-1000, doigt le plus mobile — voir
+# _IDLE_WEIGHTS). Doublée le 2026-08-13 (150→300) pour un mouvement plus visible
+# à l'œil nu ; au-delà, risque de clipping visible si la position de repos
+# (base_pose = position au moment de start()) est déjà proche de 0 ou 1000.
+IDLE_AMPLITUDE = 300
+
 
 class InspireHand:
     def __init__(self, ip, name):
@@ -201,7 +207,7 @@ def start():
         for h in _hands.values():
             pos = h.get_position()
             if pos:
-                h.start_idle(base_pose=pos)
+                h.start_idle(base_pose=pos, amplitude=IDLE_AMPLITUDE)
 
 
 def stop():

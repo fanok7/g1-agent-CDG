@@ -20,3 +20,4 @@ tablet_server/static/notes/
 tablet_server/statistiques_robot.csv
 backups/
 *.bak
+*.log

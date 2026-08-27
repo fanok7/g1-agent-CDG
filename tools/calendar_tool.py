@@ -728,27 +728,32 @@ def _handler_creer_rdv(nom: str = "", tel: str = "", email: str = "",
     )
 
 
-register(
-    {
-        "name": "creer_rdv",
-        "description": (
-            "Crée un rendez-vous de 15 minutes dans le Google Agenda de Samy. "
-            "À appeler après avoir obtenu le consentement du candidat sur le créneau choisi. "
-            "Requiert : nom, date (YYYY-MM-DD), heure (ex: '10h30'). "
-            "Optionnel : tel, email, poste."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "nom":   {"type": "string", "description": "Nom complet du candidat."},
-                "tel":   {"type": "string", "description": "Numéro de téléphone."},
-                "email": {"type": "string", "description": "Adresse email."},
-                "poste": {"type": "string", "description": "Poste souhaité (ex: Agent d'accueil aéroportuaire)."},
-                "date":  {"type": "string", "description": "Date au format YYYY-MM-DD."},
-                "heure": {"type": "string", "description": "Heure de début, ex: '10h', '10h30', '10:30'."},
-            },
-            "required": ["nom", "date", "heure"],
-        },
-    },
-    _handler_creer_rdv,
-)
+# ARCHIVÉ (2026-08-13) : la prise de RDV se fait désormais en self-service par
+# le candidat via le QR Google Calendar (tools/tablet_tools.py::afficher_qr_rdv_ecran)
+# plutôt que par le robot qui écrivait directement dans l'agenda de Samy.
+# _handler_creer_rdv reste défini plus haut (code intact) — décommenter ce
+# register() pour réactiver le tool si le besoin revient.
+# register(
+#     {
+#         "name": "creer_rdv",
+#         "description": (
+#             "Crée un rendez-vous de 15 minutes dans le Google Agenda de Samy. "
+#             "À appeler après avoir obtenu le consentement du candidat sur le créneau choisi. "
+#             "Requiert : nom, date (YYYY-MM-DD), heure (ex: '10h30'). "
+#             "Optionnel : tel, email, poste."
+#         ),
+#         "parameters": {
+#             "type": "object",
+#             "properties": {
+#                 "nom":   {"type": "string", "description": "Nom complet du candidat."},
+#                 "tel":   {"type": "string", "description": "Numéro de téléphone."},
+#                 "email": {"type": "string", "description": "Adresse email."},
+#                 "poste": {"type": "string", "description": "Poste souhaité (ex: Agent d'accueil aéroportuaire)."},
+#                 "date":  {"type": "string", "description": "Date au format YYYY-MM-DD."},
+#                 "heure": {"type": "string", "description": "Heure de début, ex: '10h', '10h30', '10:30'."},
+#             },
+#             "required": ["nom", "date", "heure"],
+#         },
+#     },
+#     _handler_creer_rdv,
+# )

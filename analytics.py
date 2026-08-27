@@ -61,33 +61,95 @@ _TOOL_ZONE = {
     "chercher_formation": "Emploi / Formation", "chercher_badge": "Emploi / Formation",
 }
 
+# Mots-clés MULTILINGUES (fr, en, es, de, it, zh, ja, ar) → un visiteur de
+# n'importe quelle langue voit sa question classée dans le bon sujet (et non
+# « Autre »). Ordre = priorité : premier motif trouvé gagne.
 _KEYWORD_ZONE = [
-    ("Vols", ["vol ", "vols", "porte", "embarq", "terminal", "avion", "flight", "gate",
-              "boarding", "departure", "arrival"]),
-    ("Hôtels", ["hotel", "hôtel", "dormir", "chambre", "nuit", "sleep", "room"]),
+    ("Vols", ["vol ", "vols", "porte", "embarq", "terminal", "avion",              # fr
+              "flight", "gate", "boarding", "departure", "arrival",                 # en
+              "vuelo", "puerta", "embarque",                                        # es
+              "flug", "einstieg", "abflug",                                         # de
+              "volo", "imbarco", "partenza",                                        # it
+              "航班", "登机", "航站", "起飞",                                         # zh
+              "便", "ゲート", "搭乗", "出発",                                         # ja
+              "رحلة", "بوابة", "صعود", "مغادرة"]),                                    # ar
+    ("Hôtels", ["hotel", "hôtel", "dormir", "chambre", "nuit", "sleep", "room",
+                "habitación", "noche", "zimmer", "nacht", "schlafen",
+                "camera", "notte", "dormire", "酒店", "住宿", "房间",
+                "ホテル", "宿泊", "部屋", "فندق", "غرفة", "نوم"]),
     ("Transport", ["métro", "metro", "rer", "bus", "train", "taxi", "navette", "tram",
-                   "transport", "subway", "shuttle"]),
-    ("Bagages", ["bagage", "valise", "consigne", "luggage", "baggage", "suitcase"]),
+                   "transport", "subway", "shuttle",
+                   "tren", "autobús", "metro ", "u-bahn", "zug", "treno", "autobus",
+                   "地铁", "火车", "公交", "出租车", "電車", "バス", "タクシー", "地下鉄",
+                   "مترو", "قطار", "حافلة", "تاكسي"]),
+    ("Bagages", ["bagage", "valise", "consigne", "luggage", "baggage", "suitcase",
+                 "equipaje", "maleta", "gepäck", "koffer", "bagaglio", "valigia",
+                 "行李", "荷物", "スーツケース", "أمتعة", "حقيبة"]),
     ("Restauration", ["manger", "restaurant", "café", "cafe", "boire", "eat", "drink",
-                      "coffee", "food"]),
+                      "coffee", "food", "comer", "restaurante", "beber",
+                      "essen", "trinken", "kaffee", "mangiare", "ristorante", "bere",
+                      "吃", "餐厅", "咖啡", "食べ", "レストラン", "コーヒー",
+                      "أكل", "مطعم", "قهوة"]),
     ("Services pratiques", ["toilette", "wc", "pharmacie", "eau", "distributeur", "atm",
-                            "toilet", "restroom", "bathroom", "water"]),
+                            "toilet", "restroom", "bathroom", "water",
+                            "baño", "aseo", "farmacia", "agua", "apotheke", "wasser",
+                            "bagno", "bagni", "servizi igienici", "acqua", "farmacia",
+                            "厕所", "洗手间", "药店", "トイレ", "お手洗い", "薬局",
+                            "حمام", "مرحاض", "صيدلية", "ماء", "دورة المياه"]),
     ("Assistance humaine", ["fauteuil", "aide", "handicap", "urgence", "perdu", "responsable",
-                            "wheelchair", "help", "emergency", "lost", "medical"]),
+                            "wheelchair", "help", "emergency", "lost", "medical",
+                            "silla de ruedas", "ayuda", "emergencia", "perdido",
+                            "rollstuhl", "hilfe", "notfall", "verloren",
+                            "sedia a rotelle", "aiuto", "emergenza", "perso",
+                            "轮椅", "帮助", "紧急", "迷路", "車椅子", "助け", "緊急", "迷子",
+                            "كرسي متحرك", "مساعدة", "طوارئ", "ضائع"]),
     ("Lieux & itinéraires", ["où est", "ou est", "comment aller", "direction", "chemin",
-                             "sortie", "where is", "how to get", "exit", "way to"]),
-    ("Wi-Fi & services", ["wifi", "wi-fi", "internet", "recharge", "prise", "charge"]),
+                             "sortie", "where is", "how to get", "exit", "way to",
+                             "dónde está", "cómo llegar", "salida", "wo ist", "wie komme",
+                             "ausgang", "dov'è", "come arrivare", "uscita",
+                             "在哪", "怎么去", "出口", "どこ", "行き方", "出口",
+                             "أين", "كيف أصل", "مخرج"]),
+    ("Wi-Fi & services", ["wifi", "wi-fi", "internet", "recharge", "prise", "charge",
+                          "cargar", "wlan", "laden", "ricaricare",
+                          "无线", "上网", "充电", "充電", "واي فاي", "إنترنت", "شحن"]),
 ]
 
 _DIGITS = re.compile(r"\d{2,}")
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
 _SPACES = re.compile(r"\s+")
 
+# Termes latins qui sont PRÉFIXE d'un mot courant d'une AUTRE catégorie : on exige
+# un mot ENTIER pour eux (sinon « bus » matcherait « business », « perso »
+# « personne », « atm » « atmosphère »). La liste reste minuscule et explicite.
+_FULLWORD = {"bus", "perso", "atm"}
+
+
+def _terme_matcher(term):
+    """Compile un mot-clé de _KEYWORD_ZONE en test d'appartenance ROBUSTE.
+
+    - Écriture non-latine (chinois/japonais/arabe : aucune lettre a-z) → sous-chaîne
+      brute. Ces langues n'ont pas de séparateur de mot, et aucune collision avec
+      les mots latins n'est possible.
+    - Latin → ancrage sur un DÉBUT de mot (\\b). « eau » ne matche plus « beaucoup »,
+      « room » plus « restroom », « porte » plus « apporter » — tout en gardant les
+      préfixes voulus (« embarq » → « embarquement », « aide » → « aidez »). Les
+      termes de _FULLWORD exigent en plus une fin de mot."""
+    if not re.search(r"[a-z]", term):                 # 中文 / 日本語 / العربية
+        return lambda q: term in q
+    pat = r"\b" + re.escape(term) + (r"\b" if term in _FULLWORD else "")
+    rx = re.compile(pat)
+    return lambda q: rx.search(q) is not None
+
+
+# Pré-compilation une fois : (zone, [matchers]). L'ordre de _KEYWORD_ZONE = priorité.
+_ZONE_MATCHERS = [(zone, [_terme_matcher(m) for m in mots])
+                  for zone, mots in _KEYWORD_ZONE]
+
 
 def categoriser(question):
     q = (question or "").lower()
-    for zone, mots in _KEYWORD_ZONE:
-        if any(m in q for m in mots):
+    for zone, matchers in _ZONE_MATCHERS:
+        if any(match(q) for match in matchers):
             return zone
     return "Autre"
 

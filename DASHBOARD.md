@@ -39,7 +39,21 @@ nohup bash scripts/lancer_dashboard.sh > /tmp/streamlit.log 2>&1 &
 http://192.168.123.164:8501
 ```
 
-(c'est l'IP du robot sur le LAN + le port 8501)
+Le serveur écoute sur `0.0.0.0` : **les deux adresses du robot fonctionnent**, il faut
+prendre celle du réseau sur lequel ton PC est branché.
+
+| Comment ton PC est relié au robot | Adresse | Remarque |
+|---|---|---|
+| **Lien direct eth0** — le cas habituel, c'est par là que passe le SSH | `192.168.123.164` | fixe |
+| Même Wi-Fi que le robot | IP wlan0 (aujourd'hui `192.168.0.128`) | change au gré du DHCP |
+
+> ⚠️ Le `Network URL` imprimé par Streamlit annonce **l'adresse Wi-Fi** — ce n'est pas
+> forcément la bonne pour toi, et c'est un piège classique. Pour trancher :
+> `ss -tnp | grep :22` sur le robot montre l'IP source de ta session SSH ; prends
+> l'adresse du robot **sur ce réseau-là**.
+>
+> Pour relever l'IP Wi-Fi : `ip -4 -o addr show wlan0`. Surtout **pas** `hostname -I`,
+> qui liste eth0 en premier.
 
 ### Pour l'arrêter
 
@@ -125,7 +139,8 @@ Avec écran, il ouvre ton navigateur automatiquement. Le bouton
 | `…:8501` ne s'ouvre pas | le dashboard n'est pas lancé | relancer `bash scripts/lancer_dashboard.sh` |
 | « Robot injoignable » sur 🔄 | `main.py` éteint | lancer `main.py`, ou lire le fichier local |
 | Dashboard vide | pas encore de données | normal — se remplit avec l'usage réel |
-| Robot sur le Wi-Fi | mauvaise IP | utiliser `http://192.168.0.128:8501` |
+| La page ne charge pas du tout | **mauvaise IP** : celle d'un réseau que ton PC ne route pas | `ss -tnp \| grep :22` sur le robot → prendre son adresse sur ce réseau (eth0 : `192.168.123.164`) |
+| Le `Network URL` de Streamlit ne répond pas | il annonce l'IP Wi-Fi, pas celle d'eth0 | même règle : l'adresse dépend d'où tu navigues, pas de ce que Streamlit imprime |
 
 ---
 

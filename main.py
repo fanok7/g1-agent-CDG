@@ -1,42 +1,88 @@
 """
 G1 Agent Interim — point d'entrée.
 
-python3.8 main.py
+python3.8 main.py                  # mode par défaut (config.py::_DEFAULT_MODE)
+python3.8 main.py --mode iinterim  # personnage agence intérim
+python3.8 main.py --mode cdg       # personnage Terminal 2F CDG
 """
 
 import sys
 sys.path.insert(0, '/home/unitree/g1_agent_interim')
 
-import asyncio
+import argparse
 import os
+
+# Doit s'exécuter AVANT le premier `import config` (direct ou transitif via un
+# tool) : config.py lit ROBOT_MODE au moment de son import pour choisir
+# SYSTEM_PROMPT. `parse_known_args` ignore les flags qu'on ne connaît pas
+# (utile si main.py est un jour lancé via un wrapper qui ajoute ses propres
+# options) plutôt que de planter dessus.
+_parser = argparse.ArgumentParser(description="G1 Agent Interim — agent vocal d'accueil")
+_parser.add_argument(
+    "--mode", choices=["cdg", "iinterim", "daneel"], default=None,
+    help="Personnage actif : 'cdg' (Terminal 2F), 'iinterim' (agence) ou "
+         "'daneel' (interprète fr↔zh). Omis = mode par défaut codé dans config.py.",
+)
+_parser.add_argument(
+    "--translate", dest="translate", action="store_true",
+    help="Force la traduction interprète (fr↔zh). Activé automatiquement avec --mode daneel.",
+)
+_parser.add_argument(
+    "--no-translate", dest="translate", action="store_false",
+    help="Désactive la traduction interprète (persona daneel conversationnel normal).",
+)
+_parser.set_defaults(translate=None)
+_args, _ = _parser.parse_known_args()
+if _args.mode:
+    os.environ["ROBOT_MODE"] = _args.mode
+if _args.translate is True:
+    os.environ["ROBOT_TRANSLATE"] = "1"
+elif _args.translate is False:
+    os.environ.pop("ROBOT_TRANSLATE", None)
+elif _args.mode == "daneel":
+    # Par défaut, le mode daneel est interprète ; --no-translate le désactive.
+    os.environ.setdefault("ROBOT_TRANSLATE", "1")
+
+import config
+
+import asyncio
 import threading
 import subprocess
 import time
+import json
 import robot.hardware as hardware
 import robot.spotify_player as spotify_player
 from robot import hand_idle
 from robot.gestures import execute_gesture
 
-# Chargement des tools — l'import suffit à les enregistrer dans le registry
-import tools.web_search       # noqa: F401
-import tools.database         # noqa: F401
-import tools.gesture_tool     # noqa: F401
-import tools.gmail            # noqa: F401
-import tools.airlabs_tools    # noqa: F401
-import tools.transport_tools  # noqa: F401
-import tools.googlemaps_tools # noqa: F401
-import tools.face_id_tool     # noqa: F401
-import tools.shake_hand_tool
-import tools.vision_tool      # noqa: F401
-import tools.rps_tool         # noqa: F401
-import tools.spotify_tool     # noqa: F401
-import tools.datetime_tool    # noqa: F401
-import tools.screenshot_tool  # noqa: F401
-import tools.calendar_tool    # noqa: F401
-import tools.qr_tool          # noqa: F401
-import tools.hotel_tools      # noqa: F401 — chercher_hotel (géocodage OSM + webhook n8n)
-import tools.tablet_tools     # noqa: F401 — proposer_choix / afficher_texte_ecran / afficher_qr_ecran / afficher_plan_ecran
-import tools.assistance_tool  # noqa: F401 — appeler_assistance (alerte n8n + salon Jitsi + sourdine IA)
+# Chargement des tools — l'import suffit à les enregistrer dans le registry.
+# En mode daneel (interprète), on n'importe QUE les outils minimaux : tous les
+# tools importés sont exposés au LLM (quelle que soit la consigne), un
+# interprète ne doit donc jamais pouvoir appeler vols/cartes/tablette/assistance.
+if config.ROBOT_MODE == "daneel":
+    import tools.web_search        # noqa: F401 — recherche_web
+    import tools.gesture_tool      # noqa: F401 — executer_geste / relacher_bras
+    import tools.datetime_tool     # noqa: F401 — date_heure_actuelle
+else:
+    import tools.web_search        # noqa: F401
+    import tools.database          # noqa: F401
+    import tools.gesture_tool      # noqa: F401
+    import tools.gmail             # noqa: F401
+    import tools.airlabs_tools     # noqa: F401
+    import tools.transport_tools   # noqa: F401
+    import tools.googlemaps_tools  # noqa: F401
+    import tools.face_id_tool      # noqa: F401
+    import tools.shake_hand_tool
+    import tools.vision_tool       # noqa: F401
+    import tools.rps_tool          # noqa: F401
+    #import tools.spotify_tool     # noqa: F401
+    import tools.screenshot_tool   # noqa: F401
+    import tools.calendar_tool     # noqa: F401
+    import tools.qr_tool           # noqa: F401
+    import tools.hotel_tools       # noqa: F401 — chercher_hotel (géocodage OSM + webhook n8n)
+    import tools.tablet_tools      # noqa: F401 — proposer_choix / afficher_texte_ecran / afficher_qr_ecran / afficher_plan_ecran
+    import tools.assistance_tool   # noqa: F401 — appeler_assistance (alerte n8n + salon Jitsi + sourdine IA)
+    import tools.body_state_tool   # noqa: F401 — etat_de_mon_corps (proprioception : rt/lowstate)
 from tools.screenshot_tool import SCREENSHOT_DIR
 from agent.text_input import input_queue as _text_input_queue
 
@@ -180,6 +226,30 @@ async def _gesture_cmd_loop() -> None:
             print(f"[GESTURE] Erreur lecture cmd : {e}")
 
 
+_daneel_intro_done = False
+
+
+async def _daneel_intro(ws):
+    """Daneel se présente en FRANÇAIS puis en CHINOIS (une seule fois par
+    processus) avant de commencer à traduire l'échange."""
+    intro = (
+        "Présente-toi comme Daneel Olivaw, droïde de protocole et interprète de conférence "
+        "français⇄chinois. Commence par te présenter en FRANÇAIS (2 phrases max, courtois et "
+        "solennel), puis répète la MÊME présentation en CHINOIS (2 phrases max). "
+        "Termine en précisant, dans les deux langues, que tu traduiras chaque phrase."
+    )
+    await ws.send(json.dumps({
+        'type': 'conversation.item.create',
+        'item': {'type': 'message', 'role': 'user',
+                 'content': [{'type': 'input_text',
+                              'text': "[SYSTÈME — instruction interne, n'y réponds pas] Présente-toi."}]}
+    }))
+    await ws.send(json.dumps({
+        'type': 'response.create',
+        'response': {'instructions': intro},
+    }))
+
+
 async def run():
     # Nettoyage de tous les fichiers IPC — un résidu de crash bloque sinon le
     # micro (agent_responding), la caméra (vision_pause) ou rejoue un geste.
@@ -187,6 +257,10 @@ async def run():
               '/tmp/agent_responding', '/tmp/vision_pause', '/tmp/rps_go',
               '/tmp/rps_result.json', '/tmp/gesture_cmd', '/tmp/fall_state.json',
               '/tmp/fire_state.json', '/tmp/qr_state.json',
+              # Verrou d'appel d'assistance : s'il reste d'une session précédente
+              # (appel non raccroché, crash…), il couperait le micro ET le HP en
+              # permanence. On le nettoie donc aussi au démarrage.
+              '/tmp/ai_paused',
               ]:
         try:
             os.remove(f)
@@ -211,7 +285,10 @@ async def run():
     led.init(get_audio_client())   
     led.idle()
     spotify_player.start()
-    threading.Thread(target=hand_idle.start, daemon=True).start()
+    if not config.TRANSLATE_MODE:
+        # Interprète (daneel) : pas de mouvement idle des doigts — le bruit des
+        # moteurs de mains se capte sur le micro du robot pendant la visio.
+        threading.Thread(target=hand_idle.start, daemon=True).start()
     threading.Thread(target=_terminal_input_loop, daemon=True).start()
     threading.Thread(target=_start_tablet_server, daemon=True).start()
     threading.Thread(target=_open_tablet_display, daemon=True).start()
@@ -219,11 +296,20 @@ async def run():
     # Vision + gestes tournent en continu comme tâches de fond : une reconnexion
     # de l'agent ne les coupe JAMAIS (pas de coupure caméra à chaque hoquet
     # réseau). Créées une seule fois pour toute la session.
-    infra = [
-        asyncio.ensure_future(_supervise(VISION_SRV_SCRIPT, "vision_server", PYTHON38)),
-        asyncio.ensure_future(_supervise(FACE_ID_SCRIPT,    "face_id",       MINICONDA_PYTHON)),
-        #asyncio.ensure_future(_supervise(VISION_FALL_SCRIPT, "fall_detection", PYTHON38, ["-c", VISION_FALL_CONFIG])),
-        #asyncio.ensure_future(_supervise(VISION_FIRE_SCRIPT, "fire_detection", PYTHON38, ["-c", VISION_FIRE_CONFIG])),
+    infra = []
+    if config.ROBOT_MODE == "daneel":
+        # Interprète : la vision/face_id ne sert à rien (pas de tools vision,
+        # salutation proactive désactivée) et le flux MJPEG occuperait le port
+        # 8080 — éventuellement déjà pris par un autre serveur. On les saute.
+        print('[G1] Mode daneel : vision/face_id non lancés (inutiles pour l\'interprète).')
+    else:
+        infra += [
+            asyncio.ensure_future(_supervise(VISION_SRV_SCRIPT, "vision_server", PYTHON38)),
+            asyncio.ensure_future(_supervise(FACE_ID_SCRIPT,    "face_id",       MINICONDA_PYTHON)),
+            #asyncio.ensure_future(_supervise(VISION_FALL_SCRIPT, "fall_detection", PYTHON38, ["-c", VISION_FALL_CONFIG])),
+            #asyncio.ensure_future(_supervise(VISION_FIRE_SCRIPT, "fire_detection", PYTHON38, ["-c", VISION_FIRE_CONFIG])),
+        ]
+    infra += [
         asyncio.ensure_future(_gesture_cmd_loop()),
     ]
 
@@ -245,6 +331,11 @@ async def run():
                 ws = await connect()
                 print('[G1] Connecté à OpenAI — agent actif.')
                 backoff = 2   # remise à zéro après une connexion réussie
+                global _daneel_intro_done
+                if config.ROBOT_MODE == "daneel" and config.TRANSLATE_MODE and not _daneel_intro_done:
+                    _daneel_intro_done = True
+                    print('[G1] Daneel se présente (fr puis zh)...')
+                    await _daneel_intro(ws)
                 await asyncio.gather(
                     send_audio_loop(ws),
                     receive_events_loop(ws),

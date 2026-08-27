@@ -1,0 +1,23 @@
+[Unit]
+Description=Robot d'accueil G1 — agent principal (main.py + serveur tablette)
+# On attend le réseau ET la synchro de l'heure : main.py se connecte à OpenAI en
+# HTTPS, une horloge fausse ferait échouer le TLS.
+After=network-online.target time-sync.target adb-reverse-tablet.service
+Wants=network-online.target
+# Pas de limite de redémarrages : si le matériel/réseau n'est pas prêt au boot,
+# on réessaie indéfiniment jusqu'à ce que ça démarre.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=unitree
+Environment=HOME=/home/unitree
+# Répertoire de travail imposé par le SDK Unitree (DDS).
+WorkingDirectory=/home/unitree/unitree_sdk2_python
+ExecStart=/usr/bin/python3.8 /home/unitree/g1_agent_interim/main.py
+# Relance automatique si main.py plante (crash, coupure…).
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

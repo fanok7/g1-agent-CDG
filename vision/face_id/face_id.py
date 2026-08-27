@@ -23,10 +23,13 @@ from insightface.app import FaceAnalysis
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PHOTOS_DIR    = os.path.join(os.path.dirname(__file__), "photos")
-CAMERA_NAME   = "UGREEN"  # nom carte v4l2 — détection auto (l'index USB change tout le temps)
-DEVICE_ID     = 6         # fallback : UGREEN capture node (video0-5 = RealSense, video6 = UGREEN capture)
+# Identifiants cherchés dans le nom v4l2 ET les attributs USB (fabricant/produit/série).
+# Le nom v4l2 seul ne suffit pas : la HBVCAM s'annonce "USB Camera: USB Camera" (générique).
+CAMERA_IDS    = ("UGREEN", "HBVCAM", "HB202400001")
+CAMERA_NAME   = CAMERA_IDS[0]   # conservé pour les logs
+DEVICE_ID     = 0         # fallback ultime si aucun nœud de capture trouvé
 WIDTH, HEIGHT = 640, 480
-SKIP          = 15       # traiter 1 frame sur SKIP
+SKIP          = 5       # traiter 1 frame sur SKIP
 THRESHOLD     = 0.4
 STATE_FILE    = "/tmp/face_id_state.json"
 FRAME_FILE    = "/tmp/latest_ugreen.jpg"   # lu par vision_server.py pour YOLO UGREEN
@@ -95,21 +98,66 @@ def _video_name(idx: int) -> str:
         return ""
 
 
-def find_camera_by_name(name_substr: str = CAMERA_NAME, fallback: int = DEVICE_ID) -> int:
-    """Retourne l'index du dernier /dev/videoN dont le nom v4l2 contient name_substr.
+def _usb_ident(idx: int) -> str:
+    """Fabricant + produit + n° de série USB du /dev/videoN, '' si introuvable.
+    Nécessaire car certaines caméras (HBVCAM) n'exposent qu'un nom v4l2 générique."""
+    try:
+        usb_dir = os.path.join(
+            os.path.realpath(f"/sys/class/video4linux/video{idx}/device"), "..")
+    except OSError:
+        return ""
+    parts = []
+    for attr in ("manufacturer", "product", "serial"):
+        try:
+            with open(os.path.join(usb_dir, attr)) as f:
+                parts.append(f.read().strip())
+        except OSError:
+            pass
+    return " ".join(parts)
+
+
+def _is_capture_node(idx: int) -> bool:
+    """True si /dev/videoN est le nœud de capture UVC (index 0) et pas le nœud
+    metadata (index 1). Permissif si l'attribut est illisible."""
+    try:
+        with open(f"/sys/class/video4linux/video{idx}/index") as f:
+            return int(f.read().strip()) == 0
+    except (OSError, ValueError):
+        return True
+
+
+def find_camera_by_name(name_substrs=CAMERA_IDS, fallback: int = DEVICE_ID) -> int:
+    """Retourne l'index du nœud de capture dont le nom v4l2 OU les attributs USB
+    contiennent un des name_substrs. À défaut, premier nœud de capture disponible.
     Pas de test d'ouverture ici : ouvrir video6 avant video7 corrompt l'USB sur
     Jetson Tegra et empêche video7 de s'ouvrir. open_camera() gère les retries."""
-    candidates = []
-    for path in sorted(glob.glob("/sys/class/video4linux/video*")):
+    if isinstance(name_substrs, str):
+        name_substrs = (name_substrs,)
+    wanted = [s.lower() for s in name_substrs]
+
+    capture_nodes, matches = [], []
+    for path in sorted(glob.glob("/sys/class/video4linux/video*"),
+                       key=lambda p: int(os.path.basename(p).replace("video", ""))):
         idx = int(os.path.basename(path).replace("video", ""))
-        if name_substr.lower() in _video_name(idx).lower():
-            candidates.append(idx)
-    if candidates:
-        best = candidates[0]  # premier nœud = nœud de capture UVC (le suivant est metadata)
-        print(f"[face_id] {name_substr} → /dev/video{best} "
-              f"(candidats {candidates})", flush=True)
+        if not _is_capture_node(idx):
+            continue
+        capture_nodes.append(idx)
+        haystack = (_video_name(idx) + " " + _usb_ident(idx)).lower()
+        if any(s in haystack for s in wanted):
+            matches.append(idx)
+
+    if matches:
+        best = matches[0]
+        print(f"[face_id] Caméra reconnue → /dev/video{best} "
+              f"({_video_name(best)} | {_usb_ident(best)}) — candidats {matches}", flush=True)
         return best
-    print(f"[face_id] {name_substr} introuvable — fallback /dev/video{fallback}", flush=True)
+    if capture_nodes:
+        best = capture_nodes[0]
+        print(f"[face_id] Aucun identifiant {list(name_substrs)} trouvé — "
+              f"1er nœud de capture /dev/video{best} "
+              f"({_video_name(best)} | {_usb_ident(best)})", flush=True)
+        return best
+    print(f"[face_id] Aucun nœud de capture — fallback /dev/video{fallback}", flush=True)
     return fallback
 
 
