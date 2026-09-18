@@ -6,7 +6,7 @@ Accessible sur http://192.168.0.128:8888
 Démarrage auto : crontab unitree
 @reboot sleep 25 && cd /home/unitree/g1_agent_interim && /usr/bin/python3.8 dashboard.py >> /home/unitree/dashboard.log 2>&1
 """
-import subprocess, threading, collections, os, sys, time, json, socket as sock_module
+import subprocess, threading, collections, os, sys, time, json, secrets, socket as sock_module
 import serial
 from flask import Flask, request, jsonify, render_template_string
 from flask_sock import Sock
@@ -17,6 +17,26 @@ import ipc
 
 app  = Flask(__name__)
 sock = Sock(app)
+
+# ── Authentification des actions sensibles ────────────────────────────────
+# Ce serveur écoute sur 0.0.0.0 (accès wifi voulu, cf. docstring du fichier) —
+# sans ça, n'importe qui sur le même réseau pourrait déclencher /api/run
+# (ex: script=damping fait s'affaisser le robot) ou /api/stop via un simple
+# lien GET. Le token protège uniquement les routes qui changent un état ;
+# /api/status, /api/stats, /api/capteurs et le flux de logs restent en lecture
+# libre (pas d'effet réel, utiles pour un coup d'œil rapide sans configurer de
+# token). Persistant si G1_ADMIN_TOKEN est dans .env, sinon régénéré à chaque
+# démarrage (et affiché en log) — pratique pour un test rapide, mais il faudra
+# alors relire le log à chaque redémarrage pour retrouver le lien admin.
+ADMIN_TOKEN = os.environ.get("G1_ADMIN_TOKEN") or secrets.token_urlsafe(16)
+if not os.environ.get("G1_ADMIN_TOKEN"):
+    print(f"[Dashboard] G1_ADMIN_TOKEN non défini dans l'environnement — "
+          f"token généré pour cette session : {ADMIN_TOKEN}")
+
+
+def _authorized() -> bool:
+    tok = request.args.get("token") or request.headers.get("X-Admin-Token")
+    return tok == ADMIN_TOKEN
 
 BASE_DIR = '/home/unitree/g1_agent_interim'
 PORT_SERIE = '/dev/ttyUSB0'
@@ -599,8 +619,10 @@ function clearLogs() {
   document.getElementById('tb-err').textContent = '0 err';
 }
 
+const ADMIN_TOKEN = "{{ admin_token }}";
+
 async function run(s) {
-  const r = await fetch('/api/run?script=' + s);
+  const r = await fetch('/api/run?script=' + s + '&token=' + encodeURIComponent(ADMIN_TOKEN));
   const d = await r.json();
   addLog('[Dashboard] run ' + s + ' → ' + (d.ok ? 'OK PID ' + d.pid : d.error));
   if (['damping','seating','standing','regular'].includes(s)) {
@@ -609,13 +631,13 @@ async function run(s) {
 }
 
 async function stop(s) {
-  const r = await fetch('/api/stop?script=' + s);
+  const r = await fetch('/api/stop?script=' + s + '&token=' + encodeURIComponent(ADMIN_TOKEN));
   const d = await r.json();
   addLog('[Dashboard] stop ' + s + ' → ' + (d.ok ? 'OK' : d.error));
 }
 
 async function emotion(e) {
-  await fetch('/api/emotion?value=' + e);
+  await fetch('/api/emotion?value=' + e + '&token=' + encodeURIComponent(ADMIN_TOKEN));
   addLog('[Dashboard] emotion → ' + e);
 }
 
@@ -746,14 +768,18 @@ setInterval(refreshCapteurs, 3000);
 
 @app.route('/')
 def index():
-    return render_template_string(DASHBOARD_HTML)
+    return render_template_string(DASHBOARD_HTML, admin_token=ADMIN_TOKEN)
 
 @app.route('/api/run')
 def api_run():
+    if not _authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
     return jsonify(lancer(request.args.get('script', '')))
 
 @app.route('/api/stop')
 def api_stop():
+    if not _authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
     return jsonify(arreter(request.args.get('script', '')))
 
 @app.route('/api/status')
@@ -762,6 +788,8 @@ def api_status():
 
 @app.route('/api/emotion')
 def api_emotion():
+    if not _authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
     send_emotion(request.args.get('value', 'content'))
     return jsonify({"ok": True})
 

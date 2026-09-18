@@ -792,7 +792,7 @@ function fullReset() {
   lastRobotMessage = 'Aucune réponse';
   setLang('fr');            // langue remise par défaut
   setViewMode('menu');      // retour à l'accueil
-  fetch('/reset', { method: 'POST' }).catch(() => {});   // efface aussi côté serveur
+  fetch('/reset', { method: 'POST', headers: { 'X-Admin-Token': ADMIN_TOKEN } }).catch(() => {});   // efface aussi côté serveur
 }
 
 // Toast de confirmation discret (feedback des actions tactiles).
@@ -1007,7 +1007,7 @@ function closeCall(notifyServer) {
   }
   const holder = document.getElementById('call-audio');
   if (holder) holder.innerHTML = '';   // retire aussi les <audio> distants
-  if (notifyServer) fetch('/call/end', { method: 'POST' }).catch(() => {});
+  if (notifyServer) fetch('/call/end', { method: 'POST', headers: { 'X-Admin-Token': ADMIN_TOKEN } }).catch(() => {});
   setViewMode('menu');
 }
 
@@ -1052,7 +1052,7 @@ function lancerAppelAssistance() {
   showToast('🆘');
   fetch('/call/start', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
     body: JSON.stringify({ motif: a.motif, langue: a.langue }),
   }).catch(err => console.error('[APPEL] démarrage :', err));
 }
@@ -1123,7 +1123,7 @@ function sendResponse(text) {
   setViewMode('chat');   // un tap (menu / choix) = une demande → montre la Discussion
   fetch('/respond', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
     body: JSON.stringify({ text }),
   }).catch(err => console.error('Erreur envoi réponse:', err));
 }
@@ -1377,6 +1377,10 @@ const initialState   = {{ initial_state | safe }};
 const initialStatus  = {{ initial_status | safe }};
 const initialChoices = {{ initial_choices | safe }};
 const initialChat    = {{ initial_chat | safe }};
+// Token admin (voir tablet_server/server.py) : renvoyé par cette page sur ses
+// propres appels /respond, /call/*, /reset — un visiteur normal ne le voit
+// jamais différemment, seul un tiers hors de cette page en serait privé.
+const ADMIN_TOKEN     = {{ admin_token | safe }};
 // État initial : si le serveur a déjà un contenu, on l'affiche ; sinon accueil.
 if (initialState && initialState.type && initialState.type !== 'idle') {
   currentContent = initialState; viewMode = 'info';

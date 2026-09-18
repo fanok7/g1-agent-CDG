@@ -44,15 +44,21 @@ PUSH_STATE_URL = TARGET.rstrip('/') + '/push_face_state'
 PUSH_FRAME_URL = TARGET.rstrip('/') + '/push_ugreen_frame'
 PUSH_YOLO_URL  = TARGET.rstrip('/') + '/push_yolo_ugreen'
 
+# Doit matcher G1_ADMIN_TOKEN dans le .env de l'Orin NX (vision_server.py) —
+# sinon vision_server.py refuse le push avec 401. Vide = comportement historique
+# (vision_server.py accepte tout si lui non plus n'a pas de token configuré).
+ADMIN_TOKEN = os.environ.get("G1_ADMIN_TOKEN", "").strip()
+_AUTH_HEADER = {'X-Admin-Token': ADMIN_TOKEN} if ADMIN_TOKEN else {}
+
 
 def _push_json(url: str, data: dict) -> None:
     try:
         if _HAS_REQUESTS:
-            requests.post(url, json=data, timeout=2)
+            requests.post(url, json=data, headers=_AUTH_HEADER, timeout=2)
         else:
             body = json.dumps(data).encode()
             req = urllib.request.Request(url, data=body, method='POST',
-                                          headers={'Content-Type': 'application/json'})
+                                          headers={**_AUTH_HEADER, 'Content-Type': 'application/json'})
             urllib.request.urlopen(req, timeout=2)
     except Exception as e:
         print(f"[face_id] Push état échoué : {e}", flush=True)
@@ -62,10 +68,10 @@ def _push_bytes(url: str, data: bytes) -> None:
     try:
         if _HAS_REQUESTS:
             requests.post(url, data=data,
-                           headers={'Content-Type': 'image/jpeg'}, timeout=2)
+                           headers={**_AUTH_HEADER, 'Content-Type': 'image/jpeg'}, timeout=2)
         else:
             req = urllib.request.Request(url, data=data, method='POST',
-                                          headers={'Content-Type': 'image/jpeg'})
+                                          headers={**_AUTH_HEADER, 'Content-Type': 'image/jpeg'})
             urllib.request.urlopen(req, timeout=2)
     except Exception as e:
         print(f"[face_id] Push frame échoué : {e}", flush=True)

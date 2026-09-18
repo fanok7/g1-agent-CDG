@@ -73,6 +73,28 @@ MAX_OBJECTS     = 5
 QUALITY         = 75
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Authentification des routes /push_* ───────────────────────────────────────
+# Ces routes acceptent n'importe quel POST sans validation : sur le réseau eth0
+# partagé avec la Thor (192.168.123.x), n'importe qui pourrait injecter une
+# fausse frame ou un faux visage "reconnu" (identifier_personne mentirait au
+# LLM). Contrairement à dashboard.py/tablet_server.py, on NE génère PAS de
+# token automatique ici : la Thor (face_id.py, realsense_remote_push.py) est
+# un AUTRE processus sur une AUTRE machine, un token généré à la volée sur
+# l'Orin NX ne serait jamais connu de la Thor. Si G1_ADMIN_TOKEN est défini
+# (même valeur des deux côtés, dans le .env de chaque machine), il est exigé ;
+# sinon, comportement historique (routes ouvertes) + avertissement au démarrage.
+ADMIN_TOKEN = os.environ.get("G1_ADMIN_TOKEN", "").strip()
+if not ADMIN_TOKEN:
+    print("[VISION] ⚠ G1_ADMIN_TOKEN non défini — routes /push_* ouvertes sans "
+          "authentification. Définir G1_ADMIN_TOKEN (même valeur sur l'Orin NX "
+          "et la Thor) pour les protéger.")
+
+
+def _authorized() -> bool:
+    if not ADMIN_TOKEN:
+        return True
+    return request.headers.get("X-Admin-Token") == ADMIN_TOKEN
+
 # Les push depuis la Thor arrivent en continu (plusieurs par seconde) — le
 # log d'accès Werkzeug par défaut ("POST /push_... 204") noierait le reste
 # des logs de main.py sans rien apporter (pas d'erreur à surveiller ici, les
@@ -290,6 +312,8 @@ def push_realsense():
     """Reçoit une frame JPEG brute depuis vision/realsense_remote_push.py (Thor)
     et l'écrit à la place de l'ancienne capture locale — même fichier, même
     contrat pour qr_tool.py et le stream /stream/realsense."""
+    if not _authorized():
+        return ('unauthorized', 401)
     global _last_rs_push
     data = request.get_data()
     if not data:
@@ -310,6 +334,8 @@ def push_realsense():
 def push_ugreen_frame():
     """Reçoit une frame JPEG UGREEN brute depuis face_id.py (Thor) — remplace
     l'ancienne écriture locale par face_id.py tournant sur ce même Jetson."""
+    if not _authorized():
+        return ('unauthorized', 401)
     data = request.get_data()
     if not data:
         return ('empty body', 400)
@@ -328,6 +354,8 @@ def push_ugreen_frame():
 def push_yolo_ugreen():
     """Reçoit les détections YOLO UGREEN (JSON) depuis face_id.py (Thor) —
     remplace l'ancien calcul local. Dessine aussi l'annotation pour /stream."""
+    if not _authorized():
+        return ('unauthorized', 401)
     global _dets_ugreen, _ann_ugreen
     try:
         dets = request.get_json(force=True)
@@ -362,6 +390,8 @@ def push_face_state():
     """Reçoit l'état JSON face_id (visages détectés, avec bbox) depuis face_id.py
     (Thor). Dessine aussi l'annotation pour /stream/face — remplace l'ancien
     stream Flask local à face_id.py (port 8081 sur la Thor, retiré)."""
+    if not _authorized():
+        return ('unauthorized', 401)
     global _ann_face
     try:
         data = request.get_json(force=True)

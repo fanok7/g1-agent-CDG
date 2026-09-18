@@ -1,6 +1,20 @@
 from config import SUPABASE_URL, SUPABASE_KEY
 from tools.registry import register
 
+# Les deux recherches ci-dessous encadrent déjà le terme dans '%...%' — on ne
+# veut PAS que le LLM (ou un texte injecté via la tablette, voir § sécurité de
+# l'audit) puisse lui-même fournir des méta-caractères ILIKE ('%'/'_') : un nom
+# ou numéro de badge réduit à '%' correspondrait alors à "n'importe quoi" et
+# renverrait des dossiers arbitraires (date de naissance, email...) au lieu
+# d'"aucun résultat". Une longueur minimale évite aussi qu'une seule lettre
+# renvoie une liste large de dossiers d'inconnus.
+_MIN_LEN = 2
+
+
+def _terme_valide(valeur) -> bool:
+    v = (valeur or '').strip()
+    return len(v) >= _MIN_LEN and '%' not in v and '_' not in v
+
 try:
     from supabase import create_client
     _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -15,7 +29,7 @@ def _handler(nom: str) -> str:
     print(f'[SUPABASE] Recherche nom="{nom}"')
     if _supabase is None:
         return 'Erreur : base de données non connectée.'
-    if not nom or len(nom.strip()) < 2:
+    if not _terme_valide(nom):
         return 'Veuillez fournir un nom de famille valide.'
     try:
         result = _supabase.table('formation') \
@@ -59,8 +73,10 @@ def _handler_badge(nom: str = None, numero_badge: str = None) -> str:
     print(f'[SUPABASE] Recherche badge nom="{nom}" numero="{numero_badge}"')
     if _supabase is None:
         return 'Erreur : base de données non connectée.'
-    if not nom and not numero_badge:
-        return 'Veuillez fournir un nom de famille ou un numéro de badge.'
+    if not numero_badge and not _terme_valide(nom):
+        return 'Veuillez fournir un nom de famille valide ou un numéro de badge.'
+    if numero_badge and not _terme_valide(numero_badge):
+        return 'Veuillez fournir un numéro de badge valide.'
     try:
         query = _supabase.table('badges_corsur') \
             .select('nom, prenom, "dateNaissance", email, "numeroDemande", "numeroBadge", etat, "dateSoumission", "dateFinAccordee", "numAA", entreprise')

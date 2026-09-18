@@ -30,11 +30,16 @@ _DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "tablet_server", "analytics_events.jsonl")
 # URL du robot (surchargée par la variable d'env G1_ROBOT_URL).
 _ROBOT_URL = os.environ.get("G1_ROBOT_URL", "http://192.168.123.164:8000") + "/api/export-logs"
+# /api/export-logs exige désormais le même token admin que le reste du serveur
+# tablette (voir tablet_server/server.py) — vide par défaut ici car ce
+# dashboard tourne le plus souvent sur un PC séparé, sans le .env du robot.
+_ADMIN_TOKEN_DEFAULT = os.environ.get("G1_ADMIN_TOKEN", "")
 
 
-def recuperer_depuis_robot(url):
+def recuperer_depuis_robot(url, token=""):
     """Télécharge le journal directement depuis le robot (une seule commande)."""
-    with urllib.request.urlopen(url, timeout=8) as r:
+    req = urllib.request.Request(url, headers={"X-Admin-Token": token} if token else {})
+    with urllib.request.urlopen(req, timeout=8) as r:
         return r.read().decode("utf-8", errors="replace")
 
 LANG_NOMS = {"fr": "Français", "en": "Anglais", "es": "Espagnol", "de": "Allemand",
@@ -150,6 +155,8 @@ st.caption("Statistiques anonymes — aucune donnée personnelle (RGPD)")
 # ── Choix de la source (barre latérale) ────────────────────────────────────
 st.sidebar.header("Source des données")
 url_robot = st.sidebar.text_input("URL du robot", _ROBOT_URL)
+token_admin = st.sidebar.text_input("Token admin (G1_ADMIN_TOKEN sur le robot)",
+                                     _ADMIN_TOKEN_DEFAULT, type="password")
 rafraichir = st.sidebar.button("🔄 Récupérer depuis le robot")
 fichier = st.sidebar.file_uploader("…ou déposer un fichier (`.xlsx`, `.csv` ou `.jsonl`)",
                                     type=["xlsx", "csv", "jsonl", "json", "txt"])
@@ -158,11 +165,11 @@ fichier = st.sidebar.file_uploader("…ou déposer un fichier (`.xlsx`, `.csv` o
 contenu_brut = None
 if rafraichir:
     try:
-        contenu_brut = recuperer_depuis_robot(url_robot)
+        contenu_brut = recuperer_depuis_robot(url_robot, token_admin)
         st.session_state["data"] = contenu_brut
         st.sidebar.success("Données récupérées depuis le robot ✅")
     except Exception as e:
-        st.sidebar.error("Robot injoignable : {}\n(le robot est-il allumé ?)".format(e))
+        st.sidebar.error("Robot injoignable : {}\n(le robot est-il allumé ? token admin correct ?)".format(e))
 elif fichier is not None:
     if fichier.name.lower().endswith(".xlsx"):
         # Fichier Excel (binaire) → on le relit et on le reconvertit en JSONL

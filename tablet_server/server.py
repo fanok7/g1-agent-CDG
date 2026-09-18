@@ -25,6 +25,7 @@ import asyncio
 import json
 import os
 import queue as _queue_mod
+import secrets
 import threading
 import time as _time_module
 from datetime import datetime
@@ -35,7 +36,7 @@ import ipc
 
 import requests
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -58,6 +59,30 @@ _current_lang = "fr"   # langue de l'interface (pilotée par l'agent)
 _current_call = None   # appel d'assistance en cours : {room, url, motif} ou None
 _pending_confirm = None  # avertissement d'assistance vocal en attente : {motif, langue} ou None
 AI_PAUSED_FLAG = ipc.AI_PAUSED_FLAG   # verrou : l'IA n'écoute ni ne parle tant qu'il existe
+
+# ── Authentification des actions sensibles ──────────────────────────────────
+# Ce serveur écoute sur 0.0.0.0 (accès wifi voulu depuis un laptop de debug,
+# cf. main.py::_start_tablet_server) — sans ça, n'importe qui sur le même
+# réseau pourrait injecter des messages dans la conversation (/respond) ou
+# déclencher un vrai appel d'assistance (/call/start) via une simple requête.
+# La page tablette elle-même reçoit le token au chargement (voir index()) et
+# le renvoie sur ses propres appels — un visiteur normal ne voit jamais rien
+# de différent. Persistant si G1_ADMIN_TOKEN est dans .env, sinon régénéré à
+# chaque démarrage (affiché en log).
+ADMIN_TOKEN = os.environ.get("G1_ADMIN_TOKEN") or secrets.token_urlsafe(16)
+if not os.environ.get("G1_ADMIN_TOKEN"):
+    print("[SERVER] G1_ADMIN_TOKEN non défini — token généré pour cette session : {}".format(ADMIN_TOKEN))
+
+
+def _authorized(request: Request) -> bool:
+    tok = request.headers.get("x-admin-token") or request.query_params.get("token")
+    return tok == ADMIN_TOKEN
+
+
+def _unauthorized():
+    return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+
 _current_choices = []  # type: List[str]
 _chat_history = []     # type: List[dict]   [{"role": "user"|"assistant", "text": "..."}, ...]
 _CHAT_HISTORY_MAX = 50
@@ -103,6 +128,7 @@ async def index(request: Request):
             # Table de traduction des boutons réflexes — source unique
             # dans choices.py, partagée avec le prompt et le tool.
             "choice_labels": json.dumps(choices.TRANSLATIONS, ensure_ascii=False),
+            "admin_token": json.dumps(ADMIN_TOKEN),
         },
     )
 
@@ -150,6 +176,8 @@ async def respond(request: Request):
     """Réponse tactile (bouton cliqué sur la tablette) — injectée dans la
     conversation Realtime exactement comme un message clavier/micro, via
     agent.text_input.input_queue (consommée par agent.events.text_input_loop)."""
+    if not _authorized(request):
+        return _unauthorized()
     body = await request.json()
     text = (body.get("text") or "").strip()
     if text:
@@ -165,6 +193,8 @@ async def call_start(request: Request):
     sur l'écran d'avertissement, que celui-ci vienne du bouton 🆘 (tactile) ou de
     la demande vocale (le tool a d'abord affiché la confirmation). C'est le SEUL
     point qui déclenche la mise en relation ; la confirmation le précède toujours."""
+    if not _authorized(request):
+        return _unauthorized()
     body = {}
     try:
         body = await request.json()
@@ -185,10 +215,12 @@ async def call_start(request: Request):
 
 
 @app.post("/call/end")
-async def call_end():
+async def call_end(request: Request):
     """Raccrochage : appelé par la tablette quand l'appel d'assistance se termine
     (bouton "Raccrocher" ou départ du salon). Retire le verrou → l'IA se remet à
     écouter et parler, et ferme le salon → le responsable est éjecté lui aussi."""
+    if not _authorized(request):
+        return _unauthorized()
     salon = (_current_call or {}).get("room")
     try:
         os.remove(AI_PAUSED_FLAG)
@@ -265,10 +297,12 @@ async def rdv_slots(date: str):
 
 
 @app.post("/reset")
-async def reset():
+async def reset(request: Request):
     """Nouvelle session : efface l'historique de conversation et remet l'écran
     à zéro. Appelée par la tablette après une longue inactivité (le visiteur est
     parti) pour ne pas exposer la session précédente au visiteur suivant."""
+    if not _authorized(request):
+        return _unauthorized()
     global _current_state, _current_choices, _current_lang, _pending_confirm
     _current_state = {"type": "idle"}
     _current_choices = []
@@ -305,11 +339,13 @@ async def rating(request: Request):
 
 
 @app.get("/api/export-logs")
-async def export_logs():
+async def export_logs(request: Request):
     """Télécharge le journal brut analytics_events.jsonl (télémétrie anonyme).
     Alimente le dashboard Streamlit (dashboard_stats.py) — voir DASHBOARD.md."""
+    if not _authorized(request):
+        return _unauthorized()
     import analytics
-    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.responses import FileResponse
     if not os.path.exists(analytics.LOG_PATH):
         return JSONResponse({"erreur": "aucune donnée"}, status_code=404)
     horod = datetime.now().strftime("%Y%m%d_%H%M")

@@ -17,6 +17,7 @@ Dépendances : pyrealsense2, opencv-python, requests (ou urllib si absent).
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -36,16 +37,21 @@ QUALITY       = 75
 FPS           = 30
 PUSH_INTERVAL = 1.0 / 30   # 30 fps envoyés au réseau
 
+# Doit matcher G1_ADMIN_TOKEN dans le .env de l'Orin NX (vision_server.py) —
+# sinon vision_server.py refuse le push avec 401. Vide = comportement historique.
+ADMIN_TOKEN = os.environ.get("G1_ADMIN_TOKEN", "").strip()
+_AUTH_HEADER = {'X-Admin-Token': ADMIN_TOKEN} if ADMIN_TOKEN else {}
+
 
 def _push(url: str, jpeg_bytes: bytes) -> bool:
     try:
         if _HAS_REQUESTS:
             r = requests.post(url, data=jpeg_bytes,
-                               headers={'Content-Type': 'image/jpeg'}, timeout=2)
+                               headers={**_AUTH_HEADER, 'Content-Type': 'image/jpeg'}, timeout=2)
             return r.status_code == 204
         else:
             req = urllib.request.Request(url, data=jpeg_bytes, method='POST',
-                                          headers={'Content-Type': 'image/jpeg'})
+                                          headers={**_AUTH_HEADER, 'Content-Type': 'image/jpeg'})
             with urllib.request.urlopen(req, timeout=2) as resp:
                 return resp.status == 204
     except Exception as e:
