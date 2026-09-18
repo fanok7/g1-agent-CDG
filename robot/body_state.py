@@ -141,6 +141,14 @@ def read_body_state():
 
     erreurs = [j for j in range(_N_JOINTS) if ms[j].motorstate != 0]
 
+    # Température à 0°C sur TOUS les moteurs est physiquement impossible sur un
+    # robot sous tension (même au repos, jamais 0 exact) — signe que la carte
+    # principale ne reçoit plus rien du bus CAN moteurs, pas que tout va bien.
+    # motorstate reste à 0 ("pas d'erreur") dans ce cas car il n'y a tout
+    # simplement pas de trame moteur à interpréter, donc `erreurs` ci-dessus ne
+    # le détecte pas seul.
+    bus_can_ok = t_max > 0
+
     return {
         'posture':      _posture(msg.imu_state),
         'bras': [
@@ -152,6 +160,7 @@ def read_body_state():
         'joints_chauds': j_chauds,
         'forces':       forces,
         'erreurs':      erreurs,
+        'bus_can_ok':   bus_can_ok,
         'tension':      round(ms[0].vol, 1),
         'age':          round(age, 2),
         'angles_rad':   q,

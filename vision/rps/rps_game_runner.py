@@ -26,6 +26,7 @@ _ROOT_DIR = os.path.dirname(os.path.dirname(_RPS_DIR))
 sys.path.insert(0, _RPS_DIR)
 sys.path.insert(0, _ROOT_DIR)
 
+import ipc
 from rps_game   import RPSGame, GESTES
 from rps_vision import RPSVision
 from rps_hand   import RPSHand
@@ -44,14 +45,14 @@ except Exception:
 
 MODEL_PATH     = os.path.join(_RPS_DIR, 'rps_v2.engine')
 GESTURES_YAML  = os.path.join(_RPS_DIR, 'hand_gestures.yaml')
-RESULT_FILE    = '/tmp/rps_result.json'
-GESTURE_CMD    = '/tmp/gesture_cmd'
-VISION_PAUSE   = '/tmp/vision_pause'
+RESULT_FILE    = ipc.RPS_RESULT
+GESTURE_CMD    = ipc.GESTURE_CMD
+VISION_PAUSE   = ipc.VISION_PAUSE_FLAG
 
 # La révélation est synchronisée sur /tmp/rps_go, écrit par events.py à la fin
 # exacte de la lecture TTS "3 ! 2 ! 1 ! Go !". Le timeout couvre le cas où le
 # compte à rebours est interrompu (latence API + TTS ≈ 4-6s en temps normal).
-GO_SIGNAL      = '/tmp/rps_go'
+GO_SIGNAL      = ipc.RPS_GO
 GO_TIMEOUT     = 9.0   # fallback si le signal n'arrive jamais
 DETECT_TIMEOUT = 6.0   # fenêtre de détection après la révélation
 

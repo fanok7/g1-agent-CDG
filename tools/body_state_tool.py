@@ -18,6 +18,13 @@ def _handler(**_kwargs) -> str:
     if 'erreur' in etat:
         return "Je ne reçois aucune information de mon corps : " + etat['erreur']
 
+    if not etat['bus_can_ok']:
+        return ("Je ne reçois AUCUNE télémétrie d'aucun de mes 29 moteurs (températures "
+                "toutes à 0°C, ce qui est physiquement impossible sous tension) — le bus "
+                "CAN interne entre ma carte principale et mes moteurs semble déconnecté. "
+                "Je ne peux rien dire de fiable sur ma posture ou mes bras tant que ce "
+                "n'est pas rebranché.")
+
     lignes = ["Posture : " + etat['posture']]
     lignes.extend(etat['bras'])
 

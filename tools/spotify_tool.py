@@ -200,14 +200,20 @@ def _controle_handler(action: str) -> str:
 def _volume_handler(volume: int) -> str:
     try:
         volume = max(0, min(100, int(volume)))
-        # Gain logiciel local (secours immédiat sur le HP)
+        # Seule et unique source de vérité pour le volume réel : le gain logiciel
+        # local (spotify_player.py, appliqué aux échantillons juste avant le HP).
+        # Le volume du device Spotify (API) reste fixé à 100 en permanence —
+        # sinon librespot applique AUSSI sa propre atténuation sur le PCM, et les
+        # deux effets se cumulent en cascade (quadratique au lieu de linéaire) :
+        # demander 50% donnait ~25% du volume, et une simple baisse pouvait
+        # sonner comme une coupure quasi totale.
         try:
             from robot import spotify_player
             spotify_player.set_volume(volume)
         except Exception:
             pass
         dev = _device_id()
-        params = {'volume_percent': volume}
+        params = {'volume_percent': 100}
         if dev:
             params['device_id'] = dev
         r = _api('PUT', '/me/player/volume', params=params)

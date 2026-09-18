@@ -20,24 +20,28 @@ try:
 except Exception:
     _TABLET_AVAILABLE = False
 
+import choices
 import config as _config
+import ipc
 # Mode interprète (Daneel) : chaque phrase fr/zh est traduite dans l'autre langue.
 TRANSLATE_MODE = _config.TRANSLATE_MODE
 
-_RESPONDING_FLAG  = "/tmp/agent_responding"
+# Chemins IPC : définis une seule fois dans ipc.py (contrat entre processus).
+# Alias locaux pour garder la lecture du fichier inchangée.
+_RESPONDING_FLAG  = ipc.RESPONDING_FLAG
 # Verrou d'appel d'assistance : tant qu'il existe, l'IA n'écoute plus (micro non
 # envoyé) et ne parle plus (audio non joué) — un humain gère l'échange.
-_AI_PAUSED_FLAG   = "/tmp/ai_paused"
+_AI_PAUSED_FLAG   = ipc.AI_PAUSED_FLAG
 from robot import call_audio as _call_audio   # pont audio de l'appel (micro/HP robot)
-_FACE_STATE_FILE  = "/tmp/face_id_state.json"
+_FACE_STATE_FILE  = ipc.FACE_ID_STATE
 _FACE_STALE_SECS  = 5.0
-_RPS_GO_SIGNAL    = "/tmp/rps_go"
+_RPS_GO_SIGNAL    = ipc.RPS_GO
 _RPS_GO_LEAD      = 0.1   # avance (s) sur la fin du TTS — compense le mouvement des doigts
-_FALL_STATE_FILE  = "/tmp/fall_state.json"
+_FALL_STATE_FILE  = ipc.FALL_STATE
 _FALL_STALE_SECS  = 15.0  # au-delà : résidu d'un crash, on ignore
-_FIRE_STATE_FILE  = "/tmp/fire_state.json"
+_FIRE_STATE_FILE  = ipc.FIRE_STATE
 _FIRE_STALE_SECS  = 15.0
-_QR_STATE_FILE    = "/tmp/qr_state.json"
+_QR_STATE_FILE    = ipc.QR_STATE
 _QR_STALE_SECS    = 15.0
 
 # Tools qui nécessitent une instruction forcée dans response.create
@@ -54,6 +58,24 @@ _MOTS_OUVERTS_DEBUT = ('comment', 'quel', 'quelle', 'quels', 'quelles', 'que ', 
                        'how', 'what', 'where', 'when', 'why', 'which', 'who', 'whose',
                        # espagnol / allemand / italien (débuts fréquents)
                        'cómo', 'qué', 'dónde', 'cuándo', 'wie', 'was', 'wo', 'come', 'dove')
+# Mêmes mots interrogatifs mais recherchés N'IMPORTE OÙ dans la phrase (bornés
+# par des espaces) — couvre "pour quelle date... et à quelle heure..." où le
+# mot ouvrant n'est pas en toute première position (contrairement au check
+# ci-dessus qui ne regarde que le tout début).
+# PAS " que "/"qu'" ici : trop ambigu mid-phrase ("voulez-vous QUE je l'affiche"
+# est une vraie question fermée, "que" n'y est pas interrogatif) — seulement les
+# mots interrogatifs suffisamment distinctifs pour ne jamais apparaître dans une
+# tournure fermée normale.
+_MOTS_OUVERTS_PARTOUT = (' comment ', ' quel ', ' quelle ', ' quels ', ' quelles ',
+                         ' où ', ' quand ', ' pourquoi ', ' combien ',
+                         ' qui ', ' lequel ', ' laquelle ',
+                         ' how ', ' what ', ' where ', ' when ', ' why ', ' which ',
+                         ' who ', ' whose ',
+                         ' cómo ', ' qué ', ' dónde ', ' cuándo ',
+                         # PAS ' was '/' wo ' (allemand) : collision avec l'anglais
+                         # "was" (passé de "be") trop fréquente — reste couvert par
+                         # _MOTS_OUVERTS_DEBUT si en tête de phrase.
+                         ' wie ', ' come ', ' dove ')
 # Tournures typiques d'une vraie question fermée (oui/non), multilingue.
 _TOURNURES_FERMEES = ('voulez-vous', 'souhaitez-vous', 'désirez-vous', 'aimeriez-vous',
                       'est-ce que', 'puis-je', 'avez-vous', 'êtes-vous', 'dois-je',
@@ -63,6 +85,44 @@ _TOURNURES_FERMEES = ('voulez-vous', 'souhaitez-vous', 'désirez-vous', 'aimerie
                       'have you', 'did you', 'is it', 'should i', 'want to',
                       # espagnol / italien / allemand
                       'quieres', 'desea', 'quiere', 'vuoi', 'möchten', 'wollen sie')
+
+# Verbes/tournures en tête de la partie GAUCHE d'un choix "X ou Y ?" — à
+# retirer pour ne garder que le nom de l'option (ex: "préférez-vous le QR code
+# ou le vocal ?" → "le QR code" une fois le verbe retiré). Triés du plus long
+# au plus court à l'usage (évite qu'un préfixe court coupe un préfixe long).
+_CHOICE_LEAD_STRIP = (
+    "est-ce que vous préférez", "est-ce que tu préfères",
+    "vous préférez plutôt", "vous préférez", "tu préfères",
+    "voulez-vous plutôt", "voulez-vous", "souhaitez-vous", "aimeriez-vous",
+    "préférez-vous", "désirez-vous",
+    "would you prefer", "do you prefer", "do you want",
+)
+
+
+def _extract_named_choices(text):
+    """Détecte une question à choix NOMMÉS ("X ou Y ?") et en extrait les deux
+    options telles quelles, plutôt que de tomber sur un Oui/Non qui n'a aucun
+    rapport (ex: "QR code ou vocal ?"). Renvoie une liste de 2 libellés courts,
+    ou None si la phrase ne s'y prête pas (pas de séparateur, options trop
+    longues/vides → probablement une phrase complexe, pas un vrai choix simple)."""
+    q = _derniere_phrase(text).rstrip('?!. ').strip()
+    sep = ' ou ' if ' ou ' in q else (' or ' if ' or ' in q else None)
+    if sep is None:
+        return None
+    parts = q.split(sep)
+    if len(parts) != 2:
+        return None   # garde simple : un seul "ou", pas de choix à 3+ options ici
+    left, right = parts[0].strip(), parts[1].strip()
+    for lead in _CHOICE_LEAD_STRIP:
+        if left.startswith(lead):
+            left = left[len(lead):].strip()
+            break
+    right = right.split(',')[0].strip()   # coupe une clause qui continuerait après la 2e option
+    left = left.strip(" ?.!")
+    right = right.strip(" ?.!")
+    if not left or not right or len(left) > 28 or len(right) > 28:
+        return None   # trop long/vide → probablement pas un choix simple, ne pas deviner
+    return [left[0].upper() + left[1:], right[0].upper() + right[1:]]
 
 
 # Le robot enchaîne souvent plusieurs phrases ("Bonjour ... Comment puis-je
@@ -84,6 +144,9 @@ def _looks_like_yes_no(text):
     q = _derniere_phrase(t)                  # la vraie question, pas le "Bonjour…" d'avant
     if q.startswith(_MOTS_OUVERTS_DEBUT):    # question ouverte -> pas de boutons
         return False
+    padded = ' ' + q + ' '
+    if any(w in padded for w in _MOTS_OUVERTS_PARTOUT):  # ouverte ailleurs qu'en tête
+        return False                                      # ("pour quelle date...")
     return any(tr in q for tr in _TOURNURES_FERMEES)
 
 
@@ -112,6 +175,59 @@ def _asks_transport(text):
         return True
     modes = sum(1 for words in _MODE_WORDS.values() if any(w in t for w in words))
     return modes >= 2   # la question liste plusieurs modes → c'est la question transport
+
+
+# Réflexe code : le modèle "mini" répond souvent "tout va bien" de mémoire à une
+# question sur son propre état physique, sans appeler etat_de_mon_corps (constaté
+# en pratique). On détecte la question dans la transcription UTILISATEUR (pas la
+# réponse, comme les autres réflexes ci-dessus) et on force l'appel du tool par
+# une instruction système injectée avant que le modèle ne réponde.
+_BODY_STATE_PHRASES = (
+    'tu vas bien', 'comment tu vas', 'comment vas-tu', 'ça va', 'ca va',
+    'tout va bien', 'tu fonctionnes', 'tu chauffes', 'tu as chaud',
+    'tu as mal', 'tu es blessé', 'est-ce que tu vas', 'dans quelle position',
+    'où sont tes bras', 'ou sont tes bras', 'tu es debout', 'tu es penché',
+    'quelqu\'un te tient', 'on te tient le bras',
+    # anglais
+    'are you ok', 'are you okay', 'how are you', 'are you fine',
+    'are you working', 'are you overheating', 'is everything ok',
+    'is everything okay', 'what position are you', 'where are your arms',
+    # espagnol / allemand / italien
+    'estás bien', 'como estas', 'cómo estás', 'geht es dir', 'wie geht es dir',
+    'stai bene', 'come stai',
+)
+
+
+def _asks_body_state(text):
+    t = (text or "").strip().lower()
+    return any(p in t for p in _BODY_STATE_PHRASES)
+
+
+# Réflexe code (mode iinterim uniquement) : un visiteur qui veut PRENDRE un
+# nouveau RDV doit se voir proposer le self-service (QR ou calendrier tactile)
+# EN PREMIER — consigne écrite dans config.py, mais le modèle "mini" l'oublie
+# régulièrement en pratique et part direct sur un échange oral (nom/date à la
+# main), constaté sur le terrain. On force donc l'instruction par le code,
+# même mécanisme que pour etat_de_mon_corps.
+# Distinction importante : "je veux PRENDRE rendez-vous" (nouveau, ce bloc) vs
+# "j'AI rendez-vous" (déjà pris, flux chercher_rdv_personne — ne pas confondre).
+_RDV_WORDS = ("rendez-vous", "rendez vous", " rdv", "entretien")
+# Tournures qui indiquent un RDV DÉJÀ pris (flux chercher_rdv_personne, pas
+# celui-ci) — l'exclusion prime toujours sur la simple présence d'un mot RDV.
+_EXISTING_RDV_PHRASES = (
+    "j'ai rendez-vous", "j'ai un rendez-vous", "j'ai rdv", "j'ai un rdv",
+    "mon rendez-vous", "mon rdv", "mon entretien",
+    "je suis venu pour mon", "je viens pour mon",
+    "quand est mon", "à quelle heure est mon", "a quelle heure est mon",
+    "confirmer mon", "vérifier mon", "verifier mon",
+)
+
+
+def _asks_new_rdv(text):
+    t = (text or "").strip().lower()
+    if any(p in t for p in _EXISTING_RDV_PHRASES):
+        return False   # a déjà un RDV → tout autre flux, pas celui-ci
+    return any(w in t for w in _RDV_WORDS)
 
 
 # Le robot PROPOSE de contacter un humain. Le modèle "mini" oublie souvent
@@ -163,8 +279,13 @@ _LANG_HINTS = {
            ' sí ', ' hotel', ' buenos', ' quiere', ' necesito', ' quisiera'),
     'de': (' der ', ' die ', ' das ', ' ich ', ' und ', ' ein ', ' hallo', ' danke',
            ' möchte', ' wo ', ' hotel', ' brauche', ' bitte', ' ich möchte'),
-    'it': (' il ', ' la ', ' sono', ' ciao', ' grazie', ' voglio', ' dove', ' per favore',
-           ' hotel', ' vorrei', ' bisogno', ' buongiorno'),
+    # Pas de ' il '/' la ' ici : articles trop courts et ambigus (' il ' = pronom
+    # français très fréquent, ' la ' = partagé fr/es/it) — ils faisaient gagner
+    # l'italien à égalité sur une phrase française banale ("Il me faut...").
+    # Score décidé sur des marqueurs propres à l'italien uniquement.
+    'it': (' sono', ' ciao', ' grazie', ' voglio', ' dove', ' per favore',
+           ' hotel', ' vorrei', ' bisogno', ' buongiorno', ' che ', ' questo ',
+           ' vorrei ', ' posso '),
     'fr': (' le ', ' la ', ' les ', ' je ', ' vous ', ' un ', ' une ', ' est ', ' et ',
            ' bonjour', ' merci', ' oui', ' non', ' hôtel', ' où ', ' veux', ' voudrais', ' besoin'),
 }
@@ -179,8 +300,19 @@ def _detect_lang(text):
     if re.search(r'[؀-ۿ]', t):   # arabe
         return 'ar'
     scores = {lang: sum(1 for w in hints if w in t) for lang, hints in _LANG_HINTS.items()}
-    best = max(scores, key=scores.get)
-    return best if scores[best] >= 1 else None   # pas assez de signal → ne change rien
+    # Léger biais pro-français : la majorité des visiteurs parlent français, donc
+    # en cas d'égalité stricte avec une autre langue, le français gagne plutôt que
+    # de rester ambigu (une vraie langue étrangère marque toujours plusieurs points
+    # d'écart sur une phrase de taille normale, donc ce +0.5 ne l'empêche pas de
+    # l'emporter légitimement).
+    scores['fr'] += 0.5
+    top = max(scores.values())
+    if top < 1:
+        return None   # pas assez de signal → ne change rien
+    winners = [lang for lang, s in scores.items() if s == top]
+    if len(winners) > 1:
+        return None   # égalité entre plusieurs langues → ambigu, ne change rien
+    return winners[0]
 
 
 # Nom lisible de la langue, pour l'instruction injectée au modèle.
@@ -256,6 +388,10 @@ _last_user_text = ""         # dernière phrase du visiteur → motif de l'écra
 _assist_confirm_shown = False  # évite de réafficher l'écran d'assistance en boucle
 _q_start = None              # horodatage de la question en cours (mesure de latence)
 _fallback_turn = False       # ce tour a-t-il basculé en recherche web (fallback IA) ?
+_body_state_turn = False     # ce tour répond à une question sur l'état physique du robot
+                              # (etat_de_mon_corps) → pas de réflexe assistance dessus
+_greeting_turn = False       # ce tour est la salutation proactive à un inconnu
+                              # (face_greeting_loop) → pas de boutons Oui/Non dessus
 
 def _response_create(tool_name=None):
     msg = {'type': 'response.create'}
@@ -397,12 +533,10 @@ async def receive_events_loop(ws):
 
         if t == 'input_audio_buffer.speech_started':
             print('[Toi] Parle...')
-            if responding:
-                get_audio_client().PlayStop('chat')
-                audio_buf.clear()
-                responding = False
-                _set_responding(False)
-                rps_go_pending = False
+            # Pas de barge-in : le robot doit finir sa phrase avant de réécouter.
+            # Le micro n'envoie déjà rien pendant qu'il parle (_RESPONDING_FLAG,
+            # send_audio_loop) — cet event ne peut donc venir que d'audio envoyé
+            # juste avant qu'il commence à répondre ; on ne coupe plus dessus.
 
         elif t == 'conversation.item.input_audio_transcription.completed':
             transcript = e.get("transcript", "")
@@ -413,6 +547,41 @@ async def receive_events_loop(ws):
                 # de la réponse du robot (pour mesurer latency_ms + is_fallback).
                 globals()['_q_start'] = time.time()
                 globals()['_fallback_turn'] = False
+            if transcript:
+                globals()['_body_state_turn'] = not TRANSLATE_MODE and _asks_body_state(transcript)
+            if transcript and not TRANSLATE_MODE and _asks_body_state(transcript):
+                # Le modèle répond souvent "tout va bien" de mémoire sans vérifier
+                # ses capteurs — on le force à appeler etat_de_mon_corps.
+                await ws.send(json.dumps({
+                    'type': 'conversation.item.create',
+                    'item': {'type': 'message', 'role': 'user',
+                             'content': [{'type': 'input_text',
+                                          'text': "[SYSTÈME — instruction interne, n'y réponds pas] "
+                                                  "On te pose une question sur ton propre état physique. "
+                                                  "Tu DOIS appeler le tool etat_de_mon_corps avant de "
+                                                  "répondre — ne réponds JAMAIS de mémoire là-dessus. "
+                                                  "Si un problème matériel est détecté (panne, capteur "
+                                                  "déconnecté, erreur moteur...), signale-le simplement à "
+                                                  "l'oral ; NE PROPOSE PAS d'appeler un responsable et "
+                                                  "N'APPELLE PAS le tool appeler_assistance pour ça — "
+                                                  "ce n'est pas un motif d'assistance visiteur."}]}
+                }))
+            if transcript and _config.ROBOT_MODE == "iinterim" and _asks_new_rdv(transcript):
+                # Le modèle part souvent direct sur un échange oral (nom/date à la
+                # main) sans jamais proposer le self-service — on le force à suivre
+                # l'ordre de priorité défini dans config.py.
+                await ws.send(json.dumps({
+                    'type': 'conversation.item.create',
+                    'item': {'type': 'message', 'role': 'user',
+                             'content': [{'type': 'input_text',
+                                          'text': "[SYSTÈME — instruction interne, n'y réponds pas] "
+                                                  "Le visiteur veut PRENDRE un nouveau rendez-vous (il n'en "
+                                                  "a pas encore). Tu DOIS d'abord appeler afficher_qr_rdv_ecran "
+                                                  "(self-service) — dis juste de scanner le QR affiché. "
+                                                  "N'appelle creer_rdv qu'ensuite, et seulement si le visiteur "
+                                                  "dit explicitement préférer donner ses informations à l'oral "
+                                                  "ou sur l'écran plutôt que scanner."}]}
+                }))
             if transcript and _TABLET_AVAILABLE:
                 push_chat("user", transcript)
                 _lang = _detect_lang(transcript)
@@ -545,6 +714,14 @@ async def receive_events_loop(ws):
                     # restent actifs : phrase originale + traduction à l'écran.
                     if TRANSLATE_MODE:
                         push_choices([])
+                    elif _body_state_turn:
+                        # Question sur l'état physique du robot (panne CAN, moteurs,
+                        # températures…) : jamais de proposition d'assistance humaine
+                        # réflexe ici, même si le robot mentionne "technicien"/
+                        # "responsable" — un problème matériel n'est pas un motif
+                        # d'appel visiteur→staff comme un fauteuil roulant ou un
+                        # bagage perdu.
+                        globals()['_assist_confirm_shown'] = False
                     elif _proposes_assistance(text_buf) and not os.path.exists(_AI_PAUSED_FLAG):
                         if not _assist_confirm_shown:
                             globals()['_assist_confirm_shown'] = True
@@ -559,11 +736,22 @@ async def receive_events_loop(ws):
                     # une question fermée malgré l'instruction dans le prompt — même
                     # classe de problème que les gestes réflexes ci-dessous : on
                     # garantit un fallback Oui/Non par le CODE s'il ne l'a pas fait.
-                    if not choix_appele:
+                    if _greeting_turn:
+                        # Salutation proactive à un inconnu (avec la question RDV en
+                        # iinterim) : jamais de boutons Oui/Non — le visiteur répond
+                        # à l'oral, les boutons seraient parasites à ce stade.
+                        globals()['_greeting_turn'] = False
+                    elif not choix_appele:
+                        _named_choices = (_extract_named_choices(text_buf)
+                                          if text_buf.strip().endswith('?') else None)
                         if _asks_transport(text_buf):
-                            push_choices(["À pied", "Voiture", "Transport", "Vélo"])
+                            push_choices(choices.TRANSPORT)
+                        elif _named_choices:
+                            # Choix entre options NOMMÉES ("QR code ou vocal ?") —
+                            # ne PAS forcer Oui/Non, ça n'aurait aucun sens ici.
+                            push_choices(_named_choices)
                         elif _looks_like_yes_no(text_buf):
-                            push_choices(["Oui", "Non"])
+                            push_choices(choices.OUI_NON)
                         else:
                             # Réponse qui n'est PAS une question fermée → on
                             # efface les boutons d'un tour précédent pour qu'ils
@@ -594,7 +782,11 @@ async def receive_events_loop(ws):
 
         elif t == 'response.done':
             globals()['_turn_tgt'] = None   # garde-fou interprète : tour terminé
-            globals()['_turn_retried'] = 0  # garde-fou langue : prêt pour le tour suivant
+            # _turn_retried n'est PAS remis à 0 ici : sinon une réponse régénérée
+            # encore dans la mauvaise langue redéclenche le garde-fou indéfiniment
+            # (boucle observée en pratique, sans nouvelle parole utilisateur). Le
+            # seul reset légitime est sur une NOUVELLE transcription utilisateur
+            # (ligne ~482) — un vrai nouveau tour, pas une régénération du même tour.
             # Ne pas retirer le flag si l'audio est encore en lecture :
             # play_audio dans l'executor s'en charge quand il termine.
             if not _audio_playing:
@@ -675,7 +867,7 @@ async def receive_events_loop(ws):
 
 async def rps_result_loop(ws):
     """Injecte le résultat RPS dans la conversation dès que la partie se termine."""
-    _RPS_RESULT = '/tmp/rps_result.json'
+    _RPS_RESULT = ipc.RPS_RESULT
     while True:
         await asyncio.sleep(1)
         if not os.path.exists(_RPS_RESULT):
@@ -974,7 +1166,7 @@ async def face_greeting_loop(ws):
         # Cooldown post-conversation : pas de salutation pendant INCONNU_COOLDOWN
         # secondes après que le robot a fini de parler
         try:
-            with open('/tmp/last_conversation_end') as f:
+            with open(ipc.LAST_CONVERSATION_END) as f:
                 _last_conversation_end = float(f.read().strip())
         except (FileNotFoundError, ValueError):
             _last_conversation_end = 0.0
@@ -1003,13 +1195,23 @@ async def face_greeting_loop(ws):
                 threading.Timer(4.0, led.clear_vision).start()
                 print(f'[FACE] Personne reconnue : {name} → salutation')
                 _greet_now()
+                if _config.ROBOT_MODE == "iinterim":
+                    _known_instr = (
+                        f'[SYSTÈME] La caméra vient de détecter {name}. Dis "je suis '
+                        f'réceptionniste chez I-Interim", salue {name} par son prénom, '
+                        f'puis invite clairement {name} à te parler ou te poser une question.'
+                    )
+                else:
+                    _known_instr = (
+                        f'[SYSTÈME] La caméra vient de détecter {name}. Salue {name} '
+                        f'chaleureusement par son prénom, puis invite clairement {name} à te '
+                        f'parler ou te poser une question.'
+                    )
                 await ws.send(json.dumps({
                     'type': 'conversation.item.create',
                     'item': {
                         'type': 'message', 'role': 'user',
-                        'content': [{'type': 'input_text',
-                                     'text': f'[SYSTÈME] La caméra vient de détecter {name}. '
-                                             f'Salue-le chaleureusement par son prénom.'}]
+                        'content': [{'type': 'input_text', 'text': _known_instr}]
                     }
                 }))
                 await ws.send(json.dumps({'type': 'response.create'}))
@@ -1064,14 +1266,27 @@ async def face_greeting_loop(ws):
                 threading.Timer(4.0, led.clear_vision).start()
                 print(f'[FACE] Nouvel inconnu confirmé ({CONFIRM_FRAMES} frames) → salutation')
                 _greet_now()
+                if _config.ROBOT_MODE == "iinterim":
+                    _unknown_instr = (
+                        '[SYSTÈME] La caméra vient de détecter une nouvelle personne '
+                        'inconnue devant toi. Présente-toi comme réceptionniste chez '
+                        'I-Interim, puis invite-la clairement à te parler (par exemple : '
+                        '"Bonjour, je suis réceptionniste chez I-Interim, n\'hésitez pas '
+                        'à me parler" puis demande-lui si elle a rendez-vous aujourd\'hui, '
+                        'ou en quoi tu peux l\'aider).'
+                    )
+                else:
+                    _unknown_instr = (
+                        '[SYSTÈME] La caméra vient de détecter une nouvelle personne '
+                        'inconnue devant toi. Dis-lui bonjour chaleureusement, puis '
+                        'invite-la clairement à te parler ou te poser une question.'
+                    )
+                globals()['_greeting_turn'] = True
                 await ws.send(json.dumps({
                     'type': 'conversation.item.create',
                     'item': {
                         'type': 'message', 'role': 'user',
-                        'content': [{'type': 'input_text',
-                                     'text': '[SYSTÈME] La caméra vient de détecter une '
-                                             'nouvelle personne inconnue devant toi. '
-                                             'Dis-lui bonjour chaleureusement.'}]
+                        'content': [{'type': 'input_text', 'text': _unknown_instr}]
                     }
                 }))
                 await ws.send(json.dumps({'type': 'response.create'}))

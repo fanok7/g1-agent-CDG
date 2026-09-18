@@ -14,6 +14,9 @@ Ajout dans main.py :
 import asyncio
 import json
 import logging
+import os
+
+import ipc
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +58,15 @@ async def shake_hand_event_loop(ws):
             log.warning('[SHAKE_LOOP] Événement inconnu : %s', event)
             continue
 
-        log.info('[SHAKE_LOOP] %s → injection GPT', event)
+        # Même garde que les autres boucles d'injection (events.py) : si le
+        # robot parle encore, response.create est rejeté et le message est
+        # perdu. On attend la fin de la phrase en cours, au plus ~3 s.
+        for _ in range(6):
+            if not os.path.exists(ipc.RESPONDING_FLAG):
+                break
+            await asyncio.sleep(0.5)
+
+        print('[SHAKE_LOOP] %s → injection GPT' % event, flush=True)
 
         try:
             await ws.send(json.dumps({

@@ -2,21 +2,79 @@
 """
 face_id.py — Reconnaissance faciale (subprocess, GPU Jetson)
 =============================================================
-Tourne en arrière-plan lancé par main.py.
-Écrit les visages détectés dans /tmp/face_id_state.json toutes les SKIP frames.
+⚠️ Tourne sur la Jetson THOR (192.168.123.166), PAS sur l'Orin NX : la caméra
+UGREEN a été déplacée là-bas en même temps que la RealSense, et la Thor a un
+vrai GPU CUDA fonctionnel pour InsightFace (onnxruntime-gpu compilé depuis les
+sources, cf. build sur la Thor — le wheel PyPI générique ne supporte pas son
+architecture). Lancé à la main sur la Thor (pas supervisé par main.py).
 
-Format JSON :
+Au lieu d'écrire /tmp/face_id_state.json et /tmp/latest_ugreen.jpg localement
+(ce qui ne servirait à rien, rien ne les lit sur la Thor), ce script POST
+chaque résultat vers vision_server.py qui tourne sur l'Orin NX :
+    /push_face_state    (JSON)       → /tmp/face_id_state.json sur l'Orin NX
+    /push_ugreen_frame  (JPEG brut)  → /tmp/latest_ugreen.jpg  sur l'Orin NX
+Ça remplace l'ancienne écriture locale — mêmes fichiers, même contrat pour les
+tools (identifier_personne, ce_que_je_vois) et pour YOLO UGREEN (vision_server).
+
+Format JSON poussé :
     {"faces": [{"name": "alice", "score": 0.91}, ...], "ts": 1234567890.0}
     faces vide = personne devant la caméra (ou inconnu uniquement)
 
-Stream vidéo optionnel : http://192.168.123.164:8081
+Pas de stream vidéo local ici : l'annotation visages + le flux MJPEG sont
+faits côté Orin NX à partir de /push_face_state (bbox incluses) et de la
+frame /push_ugreen_frame — voir vision_server.py, route /stream/face.
 """
 
 import os
+import sys
 import glob
 import json
 import time
 import threading
+
+try:
+    import requests
+    _HAS_REQUESTS = True
+except ImportError:
+    import urllib.request
+    _HAS_REQUESTS = False
+
+TARGET = os.environ.get("FACE_ID_TARGET", "http://192.168.123.164:8080")
+PUSH_STATE_URL = TARGET.rstrip('/') + '/push_face_state'
+PUSH_FRAME_URL = TARGET.rstrip('/') + '/push_ugreen_frame'
+PUSH_YOLO_URL  = TARGET.rstrip('/') + '/push_yolo_ugreen'
+
+
+def _push_json(url: str, data: dict) -> None:
+    try:
+        if _HAS_REQUESTS:
+            requests.post(url, json=data, timeout=2)
+        else:
+            body = json.dumps(data).encode()
+            req = urllib.request.Request(url, data=body, method='POST',
+                                          headers={'Content-Type': 'application/json'})
+            urllib.request.urlopen(req, timeout=2)
+    except Exception as e:
+        print(f"[face_id] Push état échoué : {e}", flush=True)
+
+
+def _push_bytes(url: str, data: bytes) -> None:
+    try:
+        if _HAS_REQUESTS:
+            requests.post(url, data=data,
+                           headers={'Content-Type': 'image/jpeg'}, timeout=2)
+        else:
+            req = urllib.request.Request(url, data=data, method='POST',
+                                          headers={'Content-Type': 'image/jpeg'})
+            urllib.request.urlopen(req, timeout=2)
+    except Exception as e:
+        print(f"[face_id] Push frame échoué : {e}", flush=True)
+
+# Chemins IPC partagés avec l'agent. Ce script tourne sous miniconda et est
+# lancé par chemin absolu : la racine du dépôt n'est pas sur sys.path.
+# ipc.py n'importe que la stdlib, il est donc sûr sous n'importe quel interpréteur.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import ipc
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
@@ -28,13 +86,10 @@ PHOTOS_DIR    = os.path.join(os.path.dirname(__file__), "photos")
 CAMERA_IDS    = ("UGREEN", "HBVCAM", "HB202400001")
 CAMERA_NAME   = CAMERA_IDS[0]   # conservé pour les logs
 DEVICE_ID     = 0         # fallback ultime si aucun nœud de capture trouvé
-WIDTH, HEIGHT = 640, 480
-SKIP          = 5       # traiter 1 frame sur SKIP
+WIDTH, HEIGHT = 1280, 960
+SKIP          = 1       # traiter 1 frame sur SKIP
 THRESHOLD     = 0.4
-STATE_FILE    = "/tmp/face_id_state.json"
-FRAME_FILE    = "/tmp/latest_ugreen.jpg"   # lu par vision_server.py pour YOLO UGREEN
-PAUSE_FILE    = "/tmp/vision_pause"   # créé par le jeu RPS → libérer /dev/video0
-STREAM_PORT   = 8081     # mettre à 0 pour désactiver le stream Flask
+PAUSE_FILE    = ipc.VISION_PAUSE_FLAG  # créé par le jeu RPS → libérer /dev/video0
 
 # ── InsightFace (GPU si disponible, sinon CPU) ────────────────────────────────
 import onnxruntime as _ort
@@ -42,9 +97,44 @@ _avail = _ort.get_available_providers()
 _providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if 'CUDAExecutionProvider' in _avail \
              else ['CPUExecutionProvider']
 print(f"[face_id] Chargement InsightFace ({_providers[0]})...", flush=True)
-face_app = FaceAnalysis(name="buffalo_sc", providers=_providers)
-face_app.prepare(ctx_id=0, det_size=(640, 480))
+face_app = FaceAnalysis(name="buffalo_m", providers=_providers)
+face_app.prepare(ctx_id=0, det_size=(1280, 960))
 print("[face_id] InsightFace prêt", flush=True)
+
+# ── YOLO (déporté ici pour réutiliser la même frame + le même GPU qu'InsightFace,
+# plutôt qu'une 2e ouverture caméra sur l'Orin NX) ────────────────────────────
+# onnxruntime brut, pas ultralytics : la lib ultralytics conditionne l'usage du
+# CUDAExecutionProvider à torch.cuda.is_available(), et seul un torch CPU-only
+# a un wheel aarch64 précompilé ici (un torch CUDA demanderait un build source
+# aussi long que celui d'onnxruntime) — inutile, l'inférence elle-même passe
+# entièrement par onnxruntime, torch n'est pas nécessaire.
+YOLO_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "yolo26n.onnx")
+YOLO_CONFIDENCE = 0.50
+YOLO_INTERVAL   = 2.0
+YOLO_INPUT_SIZE = 640
+# Sortie du modèle déjà post-NMS ([1, 300, 6] = x1,y1,x2,y2,conf,cls) — export
+# "end-to-end" ultralytics, donc pas de NMS manuel à refaire ici.
+_COCO_NAMES = (
+    "personne,vélo,voiture,moto,avion,bus,train,camion,bateau,feu de circulation,"
+    "bouche d'incendie,panneau stop,parcmètre,banc,oiseau,chat,chien,cheval,mouton,vache,"
+    "éléphant,ours,zèbre,girafe,sac à dos,parapluie,sac à main,cravate,valise,frisbee,"
+    "skis,snowboard,ballon de sport,cerf-volant,batte de baseball,gant de baseball,skateboard,"
+    "planche de surf,raquette de tennis,bouteille,verre à vin,tasse,fourchette,couteau,cuillère,"
+    "bol,banane,pomme,sandwich,orange,brocoli,carotte,hot-dog,pizza,donut,gâteau,chaise,canapé,"
+    "plante en pot,lit,table,toilettes,tv,ordinateur portable,souris,télécommande,clavier,"
+    "téléphone portable,micro-ondes,four,grille-pain,évier,réfrigérateur,livre,horloge,vase,"
+    "ciseaux,ours en peluche,sèche-cheveux,brosse à dents"
+).split(",")
+try:
+    _yolo_sess = _ort.InferenceSession(
+        YOLO_MODEL_PATH,
+        providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+                  if 'CUDAExecutionProvider' in _avail else ['CPUExecutionProvider'],
+    )
+    print(f"[face_id] YOLO chargé ({_yolo_sess.get_providers()[0]})", flush=True)
+except Exception as e:
+    _yolo_sess = None
+    print(f"[face_id] YOLO non chargé ({e}) — détection d'objets désactivée", flush=True)
 
 # ── Base de visages ───────────────────────────────────────────────────────────
 known_names: list = []
@@ -180,17 +270,8 @@ def open_camera(device_id: int = None) -> cv2.VideoCapture:
     raise RuntimeError(f"Impossible d'ouvrir /dev/video{device_id} après 6 tentatives")
 
 
-# ── État partagé entre boucle détection et Flask ─────────────────────────────
-_lock         = threading.Lock()
-_latest_frame = None
-_latest_state: dict = {"faces": [], "ts": 0.0}
-
-
 def _write_state(state: dict) -> None:
-    tmp = STATE_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f)
-    os.replace(tmp, STATE_FILE)   # écriture atomique
+    _push_json(PUSH_STATE_URL, state)
 
 
 # ── Boucle de détection ───────────────────────────────────────────────────────
@@ -226,26 +307,73 @@ def _capture_loop(cap_ref: list) -> None:
         with _raw_frame_lock:
             _raw_frame = frame
 
-        # Partage de frame pour vision_server.py (YOLO UGREEN sans conflit /dev/video0).
-        # On encode en mémoire avec cv2.imencode (le codec est choisi par l'extension
-        # '.jpg' passée ici) puis on écrit les octets bruts dans un .tmp avant un
-        # os.replace atomique. NE PAS utiliser cv2.imwrite('....tmp', ...) : imwrite
-        # déduit le format de l'extension du fichier, et '.tmp' n'est pas reconnu →
-        # échec SILENCIEUX → /tmp/latest_ugreen.jpg jamais créé → YOLO UGREEN aveugle.
+        # Partage de frame vers vision_server.py (Orin NX) pour YOLO UGREEN —
+        # POST réseau au lieu de l'ancienne écriture locale (caméra + calcul
+        # tournent maintenant sur la Thor, plus rien à écrire localement).
         try:
             ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
             if ok:
-                tmp = FRAME_FILE + ".tmp"
-                with open(tmp, "wb") as f:
-                    f.write(buf.tobytes())
-                os.replace(tmp, FRAME_FILE)
+                _push_bytes(PUSH_FRAME_URL, buf.tobytes())
         except Exception as e:
-            print(f"[face_id] Écriture frame UGREEN échouée : {e}", flush=True)
+            print(f"[face_id] Push frame UGREEN échoué : {e}", flush=True)
+
+
+def _yolo_letterbox(frame: np.ndarray, size: int = YOLO_INPUT_SIZE):
+    """Redimensionne en conservant le ratio + padding gris — retourne l'image
+    prête pour le modèle et (scale, pad_x, pad_y) pour retrouver les
+    coordonnées d'origine sur les détections."""
+    h, w = frame.shape[:2]
+    scale = min(size / h, size / w)
+    nh, nw = int(round(h * scale)), int(round(w * scale))
+    resized = cv2.resize(frame, (nw, nh))
+    pad_x, pad_y = (size - nw) // 2, (size - nh) // 2
+    padded = np.full((size, size, 3), 114, dtype=np.uint8)
+    padded[pad_y:pad_y + nh, pad_x:pad_x + nw] = resized
+    return padded, scale, pad_x, pad_y
+
+
+def _yolo_loop() -> None:
+    """Toutes les YOLO_INTERVAL secondes, infère sur la dernière frame UGREEN
+    partagée avec InsightFace (pas de 2e capture caméra) et pousse le résultat."""
+    if _yolo_sess is None:
+        return
+    input_name = _yolo_sess.get_inputs()[0].name
+    while True:
+        time.sleep(YOLO_INTERVAL)
+        if os.path.exists(PAUSE_FILE):
+            continue
+        with _raw_frame_lock:
+            frame = _raw_frame
+        if frame is None:
+            continue
+        try:
+            padded, scale, pad_x, pad_y = _yolo_letterbox(frame)
+            blob = padded[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
+            blob = np.expand_dims(blob, 0)
+            out = _yolo_sess.run(None, {input_name: blob})[0][0]  # (300, 6)
+
+            dets = []
+            for x1, y1, x2, y2, conf, cls in out:
+                if conf < YOLO_CONFIDENCE:
+                    continue
+                # Retour aux coordonnées de la frame d'origine (retire le padding/scale)
+                ox1, oy1 = (x1 - pad_x) / scale, (y1 - pad_y) / scale
+                ox2, oy2 = (x2 - pad_x) / scale, (y2 - pad_y) / scale
+                cls = int(cls)
+                label = _COCO_NAMES[cls] if 0 <= cls < len(_COCO_NAMES) else str(cls)
+                dets.append({
+                    "label": label,
+                    "conf":  round(float(conf), 2),
+                    "x":     int((ox1 + ox2) / 2),
+                    "y":     int((oy1 + oy2) / 2),
+                    "cam":   "ugreen",
+                })
+            _push_json(PUSH_YOLO_URL, dets)
+        except Exception as e:
+            print(f"[face_id] YOLO erreur : {e}", flush=True)
 
 
 def detection_loop() -> None:
-    global _latest_frame, _latest_state
-
     # Délai de démarrage : après un crash + redémarrage par _supervise (3s),
     # le kernel peut mettre 2-5s à libérer le device USB de l'instance précédente.
     time.sleep(3)
@@ -253,8 +381,7 @@ def detection_loop() -> None:
     last_results = []
 
     threading.Thread(target=_capture_loop, args=(cap_ref,), daemon=True).start()
-
-    _interval = SKIP / 30.0   # ~0.5 s entre deux inférences à 30 fps
+    threading.Thread(target=_yolo_loop, daemon=True).start()
 
     while True:
         if os.path.exists(PAUSE_FILE):
@@ -269,14 +396,11 @@ def detection_loop() -> None:
             continue
 
         faces = face_app.get(frame)
-        time.sleep(_interval)
-        last_results = []
         found = []
 
         for face in faces:
             x1, y1, x2, y2 = [int(v) for v in face.bbox]
             name, score = identify(face.normed_embedding)
-            last_results.append((x1, y1, x2, y2, name, score))
             entry = {"name": name, "score": round(score, 3), "bbox": [x1, y1, x2, y2]}
             if name == "Inconnu":
                 entry["embedding"] = face.normed_embedding.tolist()
@@ -284,78 +408,8 @@ def detection_loop() -> None:
 
         state = {"faces": found, "ts": time.time()}
         _write_state(state)
-        with _lock:
-            _latest_state = state
-
-        # Annoter la frame la plus fraîche pour le stream
-        with _raw_frame_lock:
-            frame = _raw_frame.copy()
-        for (x1, y1, x2, y2, name, score) in last_results:
-            color = (0, 255, 0) if name != "Inconnu" else (0, 0, 255)
-            label = f"{name} ({score:.2f})" if name != "Inconnu" else "Inconnu"
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.rectangle(frame, (x1, y1 - 28), (x2, y1), color, -1)
-            cv2.putText(frame, label, (x1 + 5, y1 - 7),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        with _lock:
-            _latest_frame = frame
-
-
-# ── Stream Flask optionnel ────────────────────────────────────────────────────
-def start_flask_stream(port: int) -> None:
-    from flask import Flask, Response
-
-    app_flask = Flask(__name__)
-
-    def generate():
-        while True:
-            with _lock:
-                frame = _latest_frame
-            if frame is None:
-                time.sleep(0.05)
-                continue
-            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                   + buf.tobytes() + b'\r\n')
-
-    @app_flask.route('/')
-    def index():
-        with _lock:
-            state = _latest_state
-        count = len(known_names)
-        rows  = "".join(f"<tr><td>&#x1F464; {n}</td></tr>" for n in known_names) \
-                if known_names else "<tr><td style='color:#f66'>Aucune photo</td></tr>"
-        faces_now  = state.get("faces", [])
-        faces_html = ", ".join(
-            f"<b style='color:#0f0'>{f['name']}</b>" if f['name'] != "Inconnu"
-            else "<b style='color:#f00'>Inconnu</b>"
-            for f in faces_now
-        ) or "personne"
-        return f'''<!DOCTYPE html><html><head><title>G1 Face ID</title><meta charset="utf-8">
-<style>body{{background:#111;display:flex;justify-content:center;align-items:center;
-min-height:100vh;margin:0;flex-direction:column;gap:12px;padding:20px;}}
-img{{border:2px solid #444;max-width:100%;}}h1{{color:white;font-family:monospace;margin:0;}}
-p{{color:#aaa;font-family:monospace;margin:0;}}
-table{{font-family:monospace;border-collapse:collapse;}}td{{color:#ccc;padding:3px 16px;}}
-</style></head><body>
-<h1>Unitree G1 — Face ID</h1>
-<p>{count} personne(s) dans la base &nbsp;|&nbsp; Devant caméra : {faces_html}</p>
-<table>{rows}</table><img src="/stream"></body></html>'''
-
-    @app_flask.route('/stream')
-    def stream():
-        return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-    print(f"[face_id] Stream sur http://192.168.123.164:{port}", flush=True)
-    app_flask.run(host='0.0.0.0', port=port, threaded=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    t = threading.Thread(target=detection_loop, daemon=True)
-    t.start()
-
-    if STREAM_PORT:
-        start_flask_stream(STREAM_PORT)
-    else:
-        t.join()
+    detection_loop()

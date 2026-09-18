@@ -14,9 +14,11 @@ import time
 import datetime
 import subprocess
 import json as _json
+
+import ipc
 from tools.registry import register
 
-RS_FRAME      = "/tmp/latest_realsense.jpg"
+RS_FRAME      = ipc.REALSENSE_FRAME
 QR_REPO       = "/home/unitree/QR_scan_tool"
 UV_BIN        = os.path.expanduser("~/.local/bin/uv")
 FRAME_STALE   = 3.0    # secondes

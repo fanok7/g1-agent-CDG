@@ -13,6 +13,8 @@ from flask_sock import Sock
 
 sys.path.insert(0, '/home/unitree/g1_agent_interim')
 
+import ipc
+
 app  = Flask(__name__)
 sock = Sock(app)
 
@@ -249,12 +251,12 @@ def _gerer_emotion(conn):
 
 def _surveille_capteurs():
     fichiers = {
-        "face_id":  "/tmp/face_id_state.json",
-        "vision":   "/tmp/vision_state.json",
-        "chute":    "/tmp/fall_state.json",
-        "feu":      "/tmp/fire_state.json",
-        "qr":       "/tmp/qr_state.json",
-        "agent":    "/tmp/agent_responding",
+        "face_id":  ipc.FACE_ID_STATE,
+        "vision":   ipc.VISION_STATE,
+        "chute":    ipc.FALL_STATE,
+        "feu":      ipc.FIRE_STATE,
+        "qr":       ipc.QR_STATE,
+        "agent":    ipc.RESPONDING_FLAG,
     }
 
     def usb_present(vid_pid):

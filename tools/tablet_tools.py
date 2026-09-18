@@ -20,15 +20,27 @@ import time
 import qrcode
 import requests
 
+from datetime import datetime, timedelta
+
+import choices
 from tools.registry import register
 from tools.googlemaps_tools import compute_route, geocode_address
 from tablet_server.server import push_display, push_choices, push_lang
+from tools.calendar_tool import (
+    _get_service, _free_slots, _SAMY_HOURS, _PARIS, _JOURS, _MOIS,
+)
 
 _BASE_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _STATIC_DIR = os.path.join(_BASE_DIR, "tablet_server", "static")
 _QR_DIR    = os.path.join(_STATIC_DIR, "qrcodes")
 _PLANS_DIR = os.path.join(_STATIC_DIR, "plans")
 _NOTES_DIR = os.path.join(_STATIC_DIR, "notes")
+
+# Dossiers dont le CONTENU est régénéré à chaque usage (QR, cartes, notes).
+# Ils grossissaient indéfiniment : main.py les vide au démarrage, comme il le
+# fait déjà pour vision/Screenshot. Un QR affiché lors d'une session passée
+# cesse donc de fonctionner au redémarrage suivant — c'est voulu (session propre).
+GENERATED_DIRS = (_QR_DIR, _PLANS_DIR, _NOTES_DIR)
 
 _TABLET_PORT = 8000
 
@@ -86,10 +98,11 @@ register(
             "alternative tactile à une réponse vocale. Appelle TOUJOURS cet outil "
             "juste après avoir posé une question à choix fermé (oui/non, ou un choix "
             "parmi plusieurs options nommées), quel que soit le nombre d'options. "
-            "Exemples : question oui/non -> options=['Oui','Non'] ; question sur le "
-            "mode de transport -> options=['À pied','En voiture','En transport en "
-            "commun','À vélo']. Libellés courts (1-3 mots), correspondant exactement "
-            "à ce que l'utilisateur pourrait dire à l'oral."
+            "Exemples : question oui/non -> options=" + choices.fmt(choices.OUI_NON) + " ; question sur le "
+            "mode de transport -> options=" + choices.fmt(choices.TRANSPORT) + ". Ces libellés-là doivent être "
+            "repris EXACTEMENT (la tablette les traduit toute seule). Sinon : libellés "
+            "courts (1-3 mots), correspondant exactement à ce que l'utilisateur "
+            "pourrait dire à l'oral."
         ),
         "parameters": {
             "type": "object",
@@ -484,4 +497,91 @@ register(
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
     _afficher_qr_rdv_handler,
+)
+
+
+# ── afficher_calendrier_rdv ────────────────────────────────────────────────────
+# Alternative tactile au QR self-service et à la dictée orale : un calendrier
+# interactif sur la tablette qui affiche les créneaux réellement libres
+# (réutilise _free_slots de calendar_tool.py — même source de vérité, pas de
+# double logique de disponibilité) et laisse le visiteur taper le sien. Le tap
+# repart comme un message texte ("Je choisis le créneau ...") → le LLM
+# enchaîne avec creer_rdv une fois le nom du candidat obtenu.
+def _prochain_jour_ouvre(ref):
+    while ref.weekday() not in _SAMY_HOURS:
+        ref += timedelta(days=1)
+    return ref
+
+
+# Fenêtre de navigation tactile (flèches côté client, § index.html) : jamais
+# avant aujourd'hui, jamais au-delà de 3 semaines — au-delà, ça n'a plus de
+# sens pour un RDV candidat et ça éviterait de scroller indéfiniment.
+_NAV_WINDOW_DAYS = 21
+
+
+def _afficher_calendrier_rdv_handler(date: str = "", **_kwargs) -> str:
+    try:
+        service = _get_service()
+    except Exception as e:
+        return f"Impossible d'accéder au calendrier : {e}"
+
+    now = datetime.now(_PARIS)
+    if date and date.strip():
+        try:
+            ref = _PARIS.localize(datetime.strptime(date.strip(), "%Y-%m-%d"))
+        except ValueError:
+            return f"Format de date invalide : '{date}'. Utilise YYYY-MM-DD."
+    elif now.weekday() in _SAMY_HOURS:
+        # Aujourd'hui si c'est un jour ouvré — _free_slots ignore de toute façon
+        # les créneaux déjà passés (marge de 30 min), donc jamais d'horaire
+        # indisponible proposé même si on démarre sur le jour courant.
+        ref = now
+    else:
+        ref = _prochain_jour_ouvre(now + timedelta(days=1))
+
+    if ref.weekday() not in _SAMY_HOURS:
+        return f"Samy n'est pas disponible le {_JOURS[ref.weekday()]} (week-end ou jour fermé) — choisis un autre jour."
+
+    date_iso = ref.strftime("%Y-%m-%d")
+    label = f"{_JOURS[ref.weekday()]} {ref.day} {_MOIS[ref.month - 1]}"
+    slots = _free_slots(service, date_iso, n=32)   # tous les créneaux du jour, pas juste 8
+
+    push_display({
+        "type": "calendar", "titre": "Prendre rendez-vous",
+        "date_label": label, "date_iso": date_iso, "slots": slots,
+        # Bornes de navigation (flèches) : le client ne repasse par le LLM pour
+        # aucun changement de jour dans cette fenêtre — voir /api/rdv-slots.
+        "min_date_iso": now.strftime("%Y-%m-%d"),
+        "max_date_iso": (now + timedelta(days=_NAV_WINDOW_DAYS)).strftime("%Y-%m-%d"),
+    })
+
+    if not slots:
+        return f"Calendrier affiché à l'écran — aucun créneau libre le {label}, le visiteur peut naviguer vers un autre jour avec les flèches."
+    return f"Calendrier affiché à l'écran pour le {label} ({len(slots)} créneaux libres). Le visiteur peut aussi naviguer vers d'autres jours avec les flèches. Attends qu'il en choisisse un."
+
+
+register(
+    {
+        "name": "afficher_calendrier_rdv",
+        "description": (
+            "Affiche un calendrier tactile interactif sur la tablette avec les créneaux "
+            "RÉELLEMENT libres de l'agenda de Samy pour un jour donné — le visiteur tape "
+            "directement le créneau qu'il veut. Alternative au QR self-service "
+            "(afficher_qr_rdv_ecran) pour un visiteur qui préfère choisir sur l'écran du "
+            "robot plutôt que scanner avec son téléphone. Une fois le créneau tapé, il "
+            "t'arrive comme un message ('Je choisis le créneau ... à ...') — demande le "
+            "nom du candidat si tu ne l'as pas déjà, puis appelle creer_rdv pour finaliser."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "Date au format YYYY-MM-DD. Omis = prochain jour ouvré.",
+                },
+            },
+            "required": [],
+        },
+    },
+    _afficher_calendrier_rdv_handler,
 )

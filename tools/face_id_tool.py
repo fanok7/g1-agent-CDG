@@ -7,9 +7,11 @@ et retourne qui est actuellement visible devant la caméra.
 
 import json
 import time
+
+import ipc
 from tools.registry import register
 
-STATE_FILE   = "/tmp/face_id_state.json"
+STATE_FILE   = ipc.FACE_ID_STATE
 STALE_SECS   = 10.0
 
 

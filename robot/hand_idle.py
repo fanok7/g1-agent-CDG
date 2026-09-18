@@ -21,8 +21,8 @@ import threading
 from pymodbus.client import ModbusTcpClient
 
 HANDS = {
-    "r": {"ip": "192.168.123.210", "name": "droite"},
-    "l": {"ip": "192.168.123.211", "name": "gauche"},
+    "r": {"ip": "192.168.123.211", "name": "droite"},
+    "l": {"ip": "192.168.123.210", "name": "gauche"},
 }
 PORT      = 6000
 DEVICE_ID = 1
@@ -117,13 +117,11 @@ class InspireHand:
             return self._a + (self._b - self._a) * smooth_f
 
     def _idle_animation(self, base_pose, control_hz=30, amplitude=150,
-                         breathing_period=3.5, tremor_amplitude=6,
-                         tremor_freq=9.0, synergy=True, stop_event=None):
+                         breathing_period=10.5, synergy=True, stop_event=None):
         dt = 1.0 / control_hz
         t0 = time.perf_counter()
         rng = random.Random()
-        noise = [self._ValueNoise1D(period=0.6 + 0.15 * i, rng=rng) for i in range(N_DOF)]
-        tremor_phase = [rng.uniform(0, 2 * math.pi) for _ in range(N_DOF)]
+        noise = [self._ValueNoise1D(period=3 * (0.6 + 0.15 * i), rng=rng) for i in range(N_DOF)]
 
         while stop_event is None or not stop_event.is_set():
             elapsed = time.perf_counter() - t0
@@ -132,9 +130,7 @@ class InspireHand:
                 breathing = amplitude * 0.5 * w * math.sin(
                     2 * math.pi * (elapsed / breathing_period + phase))
                 wander = noise[i].sample(elapsed) * amplitude * 0.3 * w
-                tremor = tremor_amplitude * w * math.sin(
-                    2 * math.pi * tremor_freq * elapsed + tremor_phase[i])
-                pose.append(max(0, min(1000, round(b + breathing + wander + tremor))))
+                pose.append(max(0, min(1000, round(b + breathing + wander))))
 
             if synergy:
                 pose = self.apply_synergy(pose)

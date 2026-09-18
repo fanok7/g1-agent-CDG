@@ -212,25 +212,10 @@ curl -s localhost:8000/ping # {"ok":true}
 
 Détails, pannes et évolutions : **[TABLETTE.md](TABLETTE.md)**.
 
-### Les deux autres modes de démarrage
-
-Ils tiennent tous les deux le **port 8000** : n'en activer **qu'un seul à la fois**, sinon
-`Address already in use`.
-
-**Launcher** — affiche une page « Démarrer » sur la tablette tant que `main.py` ne tourne
-pas, et le lance d'un tap (`launcher_server.py`). Le service est **déjà installé sur le
-robot**, simplement désactivé :
-
-```bash
-sudo systemctl enable --now g1-launcher    # activer
-sudo systemctl disable --now g1-launcher   # revenir au mode manuel
-
-# sur une machine neuve, installer d'abord l'unité :
-sudo cp scripts/g1-launcher.service /etc/systemd/system/ && sudo systemctl daemon-reload
-```
+### L'autre mode de démarrage
 
 **Auto-start** — `main.py` démarré au boot par systemd et relancé s'il plante (installe
-aussi la synchro NTP, indispensable au TLS, et désactive le launcher) :
+aussi la synchro NTP, indispensable au TLS) :
 
 ```bash
 bash scripts/installer_autostart.sh     # une seule fois, demande le sudo
@@ -247,11 +232,10 @@ sudo systemctl disable --now g1-main    # revenir au mode manuel
 |---------|------|------|
 | `adb-reverse-tablet` | Maintient le tunnel USB vers la tablette (port 8000) | actif au boot |
 | `g1-dashboard` | Superviseur ESP32 `dashboard.py` (Flask, port 8888) | actif au boot |
-| `g1-launcher` | Page « Démarrer » (port 8000) | installé, désactivé |
 | `g1-main` | `main.py` au boot (port 8000) | fichier fourni, **non installé** |
 
 ```bash
-for s in adb-reverse-tablet g1-dashboard g1-launcher g1-main; do
+for s in adb-reverse-tablet g1-dashboard g1-main; do
   printf "%-22s %s / %s\n" "$s" "$(systemctl is-enabled $s 2>&1)" "$(systemctl is-active $s 2>&1)"
 done
 ```

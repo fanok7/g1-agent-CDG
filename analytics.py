@@ -40,6 +40,12 @@ except Exception:                     # health dégradé si psutil absent
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(_BASE_DIR, "tablet_server", "analytics_events.jsonl")
 
+# Archive CIBLÉE (texte intégral, contrairement à LOG_PATH qui reste anonymisé) :
+# uniquement les conversations qui ont mal tourné (note ≤ 2★) ou déclenché un
+# appel d'assistance — pour relire des cas concrets et corriger prompt/tools,
+# sans enregistrer chaque visite en clair. Gitignoré (données locales).
+TRANSCRIPTS_PATH = os.path.join(_BASE_DIR, "tablet_server", "transcripts_archive.jsonl")
+
 # ── Catégorisation (zone/sujet) ─────────────────────────────────────────────
 _TOOL_ZONE = {
     "chercher_hotel": "Hôtels",
@@ -222,9 +228,12 @@ class AnalyticsLogger:
             evt = self._q.get()
             if evt is None:
                 break
+            path, payload = self.path, evt
+            if isinstance(evt, tuple) and evt[0] == "transcript":
+                path, payload = TRANSCRIPTS_PATH, evt[1]
             try:
-                with open(self.path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(evt, ensure_ascii=False) + "\n")
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(payload, ensure_ascii=False) + "\n")
             except Exception as e:
                 print("[ANALYTICS] écriture impossible : {}".format(e), flush=True)
 
@@ -294,6 +303,23 @@ class AnalyticsLogger:
             "duration_s": round(duration_s, 1) if duration_s is not None else None,
         })
 
+    def log_transcript(self, reason, turns, meta=None):
+        """Archive le texte intégral d'une conversation qui a mal tourné (note
+        basse, ou appel d'assistance déclenché). `turns` : liste de
+        {"role": "user"|"assistant", "text": ...} — déjà en mémoire côté
+        tablet_server (_chat_history), aucune capture supplémentaire ajoutée.
+        Écrit dans TRANSCRIPTS_PATH, séparé du fichier anonyme LOG_PATH."""
+        if not turns:
+            return
+        evt = {
+            "ts": _now(), "session_id": self._session(), "reason": reason,
+            "turns": turns, "meta": meta or {},
+        }
+        try:
+            self._q.put_nowait(("transcript", evt))
+        except Exception:
+            pass
+
     def log_alert(self, kind):
         """Alerte système (chute/feu/fumée) : session_id null — non liée à une
         visite (détectée par la vision, indépendamment de toute interaction)."""
@@ -319,6 +345,7 @@ log_question = logger.log_question
 log_tool = logger.log_tool
 log_rating = logger.log_rating
 log_call = logger.log_call
+log_transcript = logger.log_transcript
 log_alert = logger.log_alert
 note_api_error = logger.note_api_error
 

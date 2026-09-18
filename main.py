@@ -44,6 +44,7 @@ elif _args.mode == "daneel":
     os.environ.setdefault("ROBOT_TRANSLATE", "1")
 
 import config
+import ipc
 
 import asyncio
 import threading
@@ -53,6 +54,7 @@ import json
 import robot.hardware as hardware
 import robot.spotify_player as spotify_player
 from robot import hand_idle
+from robot import thor_remote
 from robot.gestures import execute_gesture
 
 # Chargement des tools — l'import suffit à les enregistrer dans le registry.
@@ -75,7 +77,7 @@ else:
     import tools.shake_hand_tool
     import tools.vision_tool       # noqa: F401
     import tools.rps_tool          # noqa: F401
-    #import tools.spotify_tool     # noqa: F401
+    import tools.spotify_tool      # noqa: F401 — spotify_jouer/en_cours/controle/volume
     import tools.screenshot_tool   # noqa: F401
     import tools.calendar_tool     # noqa: F401
     import tools.qr_tool           # noqa: F401
@@ -93,6 +95,9 @@ from agent.parler_client import send_emotion
 from agent.session import connect
 from agent.events import (send_audio_loop, receive_events_loop, face_greeting_loop,
                           rps_result_loop, qr_alert_loop, text_input_loop)
+# Réaction verbale pendant la poignée de main capteur-pilotée (tool serrer_main).
+# S'auto-désactive si shake_hand_tool n'est pas chargé (mode daneel).
+from agent.shake_hand_loop import shake_hand_event_loop
 
 
 
@@ -100,12 +105,10 @@ MINICONDA_PYTHON    = "/home/unitree/miniconda3/bin/python3"
 PYTHON38            = "/usr/bin/python3.8"
 FACE_ID_SCRIPT      = "/home/unitree/g1_agent_interim/vision/face_id/face_id.py"
 VISION_SRV_SCRIPT   = "/home/unitree/g1_agent_interim/vision/vision_server.py"
-GESTURE_POSE_SCRIPT = "/home/unitree/g1_agent_interim/vision/gesture_pose.py"
 VISION_FALL_SCRIPT  = "/home/unitree/g1_agent_interim/vision/fall_detection/main.py"
 VISION_FALL_CONFIG  = "/home/unitree/g1_agent_interim/vision/fall_detection/config/g1.yaml"
 VISION_FIRE_SCRIPT  = "/home/unitree/g1_agent_interim/vision/fire_detection/main.py"
 VISION_FIRE_CONFIG  = "/home/unitree/g1_agent_interim/vision/fire_detection/config/g1.yaml"
-GESTURE_CMD_FILE    = "/tmp/gesture_cmd"
 TABLET_PORT         = 8000
 
 
@@ -178,6 +181,15 @@ def _terminal_input_loop():
 
 send_emotion("content")
 
+# Sous-processus supervisés (vision_server, etc.) — trackés pour être tués à
+# l'arrêt de main.py (Ctrl+C ou crash). Sans ça, un Popen orphelin garde le
+# port (8080 pour vision_server) occupé au prochain lancement : main.py
+# redémarre alors qu'un ancien process tourne toujours dessus, avec deux
+# agents actifs en parallèle (deux face_greeting_loop → double salut du LLM
+# sur la même détection).
+_child_procs: list = []
+
+
 def _start_subprocess(script: str, tag: str, python: str = MINICONDA_PYTHON,
                       args=None) -> subprocess.Popen:
     proc = subprocess.Popen(
@@ -185,8 +197,22 @@ def _start_subprocess(script: str, tag: str, python: str = MINICONDA_PYTHON,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    _child_procs.append(proc)
     print(f"[G1] {tag} démarré (PID {proc.pid})")
     return proc
+
+
+def _kill_child_procs() -> None:
+    for proc in _child_procs:
+        if proc.poll() is None:   # encore vivant
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
 
 async def _pipe_logs(proc: subprocess.Popen) -> None:
@@ -210,16 +236,17 @@ async def _supervise(script: str, tag: str, python: str, args=None) -> None:
 
 
 async def _gesture_cmd_loop() -> None:
-    """Surveille /tmp/gesture_cmd et exécute les gestes détectés par gesture_pose."""
+    """Surveille /tmp/gesture_cmd et exécute le geste demandé. Unique producteur
+    aujourd'hui : rps_game_runner, pour les réactions de fin de manche."""
     loop = asyncio.get_event_loop()
     while True:
         await asyncio.sleep(0.1)
-        if not os.path.exists(GESTURE_CMD_FILE):
+        if not os.path.exists(ipc.GESTURE_CMD):
             continue
         try:
-            with open(GESTURE_CMD_FILE) as f:
+            with open(ipc.GESTURE_CMD) as f:
                 geste = f.read().strip()
-            os.remove(GESTURE_CMD_FILE)
+            os.remove(ipc.GESTURE_CMD)
             if geste:
                 threading.Thread(target=execute_gesture, args=(geste,), daemon=True).start()
         except Exception as e:
@@ -253,26 +280,25 @@ async def _daneel_intro(ws):
 async def run():
     # Nettoyage de tous les fichiers IPC — un résidu de crash bloque sinon le
     # micro (agent_responding), la caméra (vision_pause) ou rejoue un geste.
-    for f in ['/tmp/vision_state.json', '/tmp/face_id_state.json',
-              '/tmp/agent_responding', '/tmp/vision_pause', '/tmp/rps_go',
-              '/tmp/rps_result.json', '/tmp/gesture_cmd', '/tmp/fall_state.json',
-              '/tmp/fire_state.json', '/tmp/qr_state.json',
-              # Verrou d'appel d'assistance : s'il reste d'une session précédente
-              # (appel non raccroché, crash…), il couperait le micro ET le HP en
-              # permanence. On le nettoie donc aussi au démarrage.
-              '/tmp/ai_paused',
-              ]:
-        try:
-            os.remove(f)
-        except FileNotFoundError:
-            pass
+    # La liste exacte et la raison de chaque fichier sont dans ipc.py.
+    ipc.cleanup()
 
-    # Vide le dossier des screenshots à chaque lancement : on repart d'une session
-    # propre. Les photos de feu/chute sont conservées PENDANT la session (preuve +
-    # email), puis effacées au prochain démarrage de main.py.
-    if os.path.isdir(SCREENSHOT_DIR):
-        for name in os.listdir(SCREENSHOT_DIR):
-            path = os.path.join(SCREENSHOT_DIR, name)
+    # Vide les dossiers de fichiers générés à chaque lancement : on repart d'une
+    # session propre. Les photos de feu/chute sont conservées PENDANT la session
+    # (preuve + pièce jointe email), les QR/cartes/notes de la tablette le temps
+    # que le visiteur les scanne ; tout est effacé au démarrage suivant.
+    # On lit tablet_tools depuis sys.modules plutôt que de l'importer : un import
+    # ici ENREGISTRERAIT ses 8 tools dans le registry, y compris en mode daneel
+    # qui les exclut volontairement de sa liste d'imports.
+    _dossiers_a_vider = [SCREENSHOT_DIR]
+    _tablet_tools = sys.modules.get("tools.tablet_tools")
+    if _tablet_tools is not None:
+        _dossiers_a_vider += list(_tablet_tools.GENERATED_DIRS)
+    for dossier in _dossiers_a_vider:
+        if not os.path.isdir(dossier):
+            continue
+        for name in os.listdir(dossier):
+            path = os.path.join(dossier, name)
             if os.path.isfile(path):
                 try:
                     os.remove(path)
@@ -303,9 +329,18 @@ async def run():
         # 8080 — éventuellement déjà pris par un autre serveur. On les saute.
         print('[G1] Mode daneel : vision/face_id non lancés (inutiles pour l\'interprète).')
     else:
+        # face_id + RealSense NE tournent PLUS ici : les deux caméras ont été
+        # déplacées sur la Jetson Thor (192.168.123.166) pour son GPU CUDA réel
+        # (onnxruntime générique de cet Orin NX est CPU-only). Elles tournent
+        # là-bas en services systemd --user persistants (Restart=always) et
+        # POST leurs résultats vers vision_server via /push_face_state,
+        # /push_ugreen_frame, /push_realsense — voir vision/vision_server.py.
+        # On les (re)démarre ici pour un état propre à chaque session, en plus
+        # de leur persistance systemd déjà autonome côté Thor.
+        thor_remote.ensure_thor_vision_running()
         infra += [
             asyncio.ensure_future(_supervise(VISION_SRV_SCRIPT, "vision_server", PYTHON38)),
-            asyncio.ensure_future(_supervise(FACE_ID_SCRIPT,    "face_id",       MINICONDA_PYTHON)),
+            #asyncio.ensure_future(_supervise(FACE_ID_SCRIPT,    "face_id",       MINICONDA_PYTHON)),
             #asyncio.ensure_future(_supervise(VISION_FALL_SCRIPT, "fall_detection", PYTHON38, ["-c", VISION_FALL_CONFIG])),
             #asyncio.ensure_future(_supervise(VISION_FIRE_SCRIPT, "fire_detection", PYTHON38, ["-c", VISION_FIRE_CONFIG])),
         ]
@@ -345,6 +380,7 @@ async def run():
                     #fall_alert_loop(ws),
                     #fire_alert_loop(ws),
                     qr_alert_loop(ws),
+                    shake_hand_event_loop(ws),
                 )
             except asyncio.CancelledError:
                 raise   # arrêt volontaire (Ctrl+C) → surtout ne pas reconnecter
@@ -364,7 +400,7 @@ async def run():
                 except Exception:
                     pass
                 try:
-                    os.remove('/tmp/agent_responding')
+                    os.remove(ipc.RESPONDING_FLAG)
                 except FileNotFoundError:
                     pass
             await asyncio.sleep(backoff)
@@ -379,3 +415,5 @@ if __name__ == '__main__':
         asyncio.run(run())
     except KeyboardInterrupt:
         print('\n[G1] Au revoir !')
+    finally:
+        _kill_child_procs()

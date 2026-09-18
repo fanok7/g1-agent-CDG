@@ -22,7 +22,6 @@ via loop.call_soon_threadsafe.
 """
 
 import asyncio
-import csv
 import json
 import os
 import queue as _queue_mod
@@ -30,6 +29,9 @@ import threading
 import time as _time_module
 from datetime import datetime
 from typing import List, Optional
+
+import choices
+import ipc
 
 import requests
 from fastapi import FastAPI, Request
@@ -40,19 +42,10 @@ from fastapi.templating import Jinja2Templates
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Avis (notation de la dernière réponse) ──────────────────────────────────
-# L'avis reste 100 % LOCAL : historique CSV + agrégation dans le dashboard via
-# analytics.py (note moyenne, satisfaction par zone). Plus d'envoi n8n : il
-# doublait le CSV sans usage, et la satisfaction se lit désormais dans /admin.
-_STATS_FILE = os.path.join(_BASE_DIR, "statistiques_robot.csv")
-
-
-def _ensure_stats_file():
-    if not os.path.exists(_STATS_FILE):
-        with open(_STATS_FILE, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(["Horodatage", "Note", "Question", "Reponse"])
-
-
-_ensure_stats_file()
+# L'avis reste 100 % LOCAL, et passe par un SEUL chemin : analytics.log_rating,
+# qui alimente le dashboard (note moyenne, satisfaction par zone). Il a existé
+# en plus un statistiques_robot.csv écrit en parallèle : personne ne le lisait
+# (le dashboard ne lit que le .jsonl), il a été retiré.
 
 app = FastAPI(title="G1 Tablette")
 app.mount("/static", StaticFiles(directory=os.path.join(_BASE_DIR, "static")), name="static")
@@ -64,7 +57,7 @@ _current_status = "ecoute"
 _current_lang = "fr"   # langue de l'interface (pilotée par l'agent)
 _current_call = None   # appel d'assistance en cours : {room, url, motif} ou None
 _pending_confirm = None  # avertissement d'assistance vocal en attente : {motif, langue} ou None
-AI_PAUSED_FLAG = "/tmp/ai_paused"   # verrou : l'IA n'écoute ni ne parle tant qu'il existe
+AI_PAUSED_FLAG = ipc.AI_PAUSED_FLAG   # verrou : l'IA n'écoute ni ne parle tant qu'il existe
 _current_choices = []  # type: List[str]
 _chat_history = []     # type: List[dict]   [{"role": "user"|"assistant", "text": "..."}, ...]
 _CHAT_HISTORY_MAX = 50
@@ -107,6 +100,9 @@ async def index(request: Request):
             "initial_status": json.dumps(_current_status),
             "initial_choices": json.dumps(_current_choices),
             "initial_chat": json.dumps(_chat_history),
+            # Table de traduction des boutons réflexes — source unique
+            # dans choices.py, partagée avec le prompt et le tool.
+            "choice_labels": json.dumps(choices.TRANSLATIONS, ensure_ascii=False),
         },
     )
 
@@ -220,7 +216,7 @@ async def clientlog(request: Request):
         pass
     ligne = "{} {}\n".format(datetime.now().strftime("%H:%M:%S"), body.get("msg", ""))
     try:
-        with open("/tmp/tablet_client.log", "a", encoding="utf-8") as f:
+        with open(ipc.TABLET_CLIENT_LOG, "a", encoding="utf-8") as f:
             f.write(ligne)
     except Exception:
         pass
@@ -236,6 +232,36 @@ async def assist_cancel():
     global _pending_confirm
     _pending_confirm = None
     return {"ok": True}
+
+
+@app.get("/api/rdv-slots")
+async def rdv_slots(date: str):
+    """Créneaux libres pour UN jour donné — appelé directement par les flèches
+    du calendrier tactile (afficher_calendrier_rdv), SANS repasser par le LLM :
+    la navigation jour par jour doit être instantanée, pas au prix d'un aller-
+    retour Realtime API. Import tardif (comme /call/start) pour éviter tout
+    souci d'ordre d'import avec le paquet tools au démarrage de main.py."""
+    from fastapi.responses import JSONResponse
+    from datetime import datetime as _dt
+    from tools.calendar_tool import _get_service, _free_slots, _SAMY_HOURS, _PARIS, _JOURS, _MOIS
+
+    try:
+        ref = _PARIS.localize(_dt.strptime(date, "%Y-%m-%d"))
+    except ValueError:
+        return JSONResponse({"error": "date invalide"}, status_code=400)
+
+    label = "{} {} {}".format(_JOURS[ref.weekday()], ref.day, _MOIS[ref.month - 1])
+
+    if ref.weekday() not in _SAMY_HOURS:
+        return {"date_iso": date, "date_label": label, "slots": [], "closed": True}
+
+    try:
+        service = _get_service()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    slots = _free_slots(service, date, n=32)
+    return {"date_iso": date, "date_label": label, "slots": slots, "closed": False}
 
 
 @app.post("/reset")
@@ -254,22 +280,25 @@ async def reset():
 
 @app.post("/api/rating")
 async def rating(request: Request):
-    """Notation (1-5 étoiles) de la dernière réponse du robot par le
-    visiteur — sauvegardée en local (CSV) et envoyée à n8n en arrière-plan
-    (best-effort : un échec réseau ne doit jamais bloquer la tablette)."""
+    """Notation (1-5 étoiles) de la dernière réponse du robot par le visiteur.
+    Enregistrée en local dans la télémétrie anonyme (analytics), lue par le
+    dashboard Streamlit. Best-effort : un échec ne bloque jamais la tablette."""
     body = await request.json()
     note = body.get("note")
     question = body.get("question", "")
-    reponse = body.get("reponse", "")
-    horodatage = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    with open(_STATS_FILE, "a", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow([horodatage, note, question, reponse])
 
     # Alimente le dashboard : note + zone (déduite de la question notée), anonyme.
     try:
         import analytics
         analytics.log_rating(note, question)
+        # Note basse : archive le texte intégral de la conversation pour relecture
+        # (optimiser prompt/tools) — le fichier anonyme, lui, ne garde que la note.
+        try:
+            if int(note) <= 2:
+                analytics.log_transcript("low_rating", list(_chat_history),
+                                          {"note": note, "question": question})
+        except (TypeError, ValueError):
+            pass
     except Exception:
         pass
     return {"status": "success"}
@@ -341,7 +370,7 @@ def push_assist_confirm(info):
     # Trace de diagnostic (lisible depuis /tmp) : confirme que le tool a bien été
     # appelé ET combien de tablettes sont connectées au moment de l'envoi.
     try:
-        with open("/tmp/assist_debug.log", "a", encoding="utf-8") as f:
+        with open(ipc.ASSIST_DEBUG_LOG, "a", encoding="utf-8") as f:
             f.write("{} push_assist_confirm motif={!r} abonnes_SSE={} loop={}\n".format(
                 datetime.now().strftime("%H:%M:%S"), info.get("motif"),
                 len(_subscribers), _loop is not None))
@@ -386,6 +415,10 @@ def push_call_end():
             # (en-dessous : décroché immédiat / personne). Heuristique honnête.
             analytics.log_call(info.get("motif", ""),
                                answered=bool(duree >= 5), duration_s=duree)
+            # Appel d'assistance = le robot n'a pas suffi seul : archive le texte
+            # intégral pour comprendre pourquoi (prompt/tool manquant, incompréhension…).
+            analytics.log_transcript("assistance_call", list(_chat_history),
+                                      {"motif": info.get("motif", ""), "duration_s": duree})
         except Exception:
             pass
     global _current_call_status

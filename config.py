@@ -1,5 +1,7 @@
 import os
 from dotenv import load_dotenv
+
+import choices
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 load_dotenv(os.path.expanduser('~/.env'))
 
@@ -20,7 +22,7 @@ VOICE        = 'marin'
 
 # ── Audio ─────────────────────────────────────────────
 VOLUME_BOOST = 3.0
-ROBOT_VOLUME = 70
+ROBOT_VOLUME = 80
 
 # ── Réseau robot ──────────────────────────────────────
 ROBOT_INTERFACE  = 'eth0'
@@ -82,6 +84,7 @@ Tu es aussi capable d'identifier les gens qui tombent au sol et les feux.
 # ── Bloc commun : Spotify ─────────────────────────────────────────────────────
 _SPOTIFY = """
 Musique Spotify : appelle toujours le tool (jamais de mémoire). spotify_jouer (artiste/genre/ambiance), spotify_en_cours (ce qui joue), spotify_controle (pause/reprendre/suivant/précédent), spotify_volume.
+IMPORTANT sur le volume : "baisse/monte/remonte/remets le son" = TOUJOURS spotify_volume (jamais spotify_controle). spotify_controle('reprendre') sert UNIQUEMENT à relancer une lecture explicitement mise en PAUSE — ne l'appelle jamais pour remonter un son qui a juste été baissé, ça n'a aucun effet sur le volume et le visiteur croira que rien ne s'est passé.
 IMPORTANT : en jouant/changeant/contrôlant la musique, ne dis RIEN ou 3 mots max ("c'est parti") — chaque phrase coupe la musique. Tu réponds normalement seulement pour spotify_en_cours ou une vraie question.
 """
 
@@ -128,9 +131,9 @@ _TABLETTE = """
 Tablette tactile : le robot a un écran annexe.
 - definir_langue_ecran : dès que tu identifies la langue du visiteur (ou s'il change de langue), appelle ce tool avec sa langue (fr, en, es, de, it, ar, zh, ja) pour que l'écran s'affiche dans SA langue — en plus de lui parler dans cette langue. Fais-le une seule fois par langue, discrètement (sans l'annoncer).
 - proposer_choix : affiche des boutons tactiles. RÈGLE VALABLE DANS TOUTES LES LANGUES — appelle proposer_choix À CHAQUE FOIS que tu poses :
-    (a) la question du mode de transport (avant un itinéraire) → TOUJOURS ['À pied','Voiture','Transport','Vélo'] ;
-    (b) une vraie question fermée oui/non qui appelle une décision (ex: "Voulez-vous que je l'affiche à l'écran ?") → ['Oui','Non'] ;
-    (c) un choix de langue → ['Français','English'].
+    (a) la question du mode de transport (avant un itinéraire) → TOUJOURS {transport} ;
+    (b) une vraie question fermée oui/non qui appelle une décision (ex: "Voulez-vous que je l'affiche à l'écran ?") → {oui_non} ;
+    (c) un choix de langue → {langue}.
   IMPORTANT : utilise TOUJOURS ces libellés EXACTS en français, MÊME si tu parles anglais/espagnol/etc. — la tablette les TRADUIT automatiquement à l'écran dans la langue du visiteur. Ne les traduis pas toi-même.
   N'affiche PAS de boutons pour un oui/non conversationnel banal, ni pour une question OUVERTE (comment/pourquoi/quel/où…). Les boutons apparaissent quand tu as FINI de parler — inutile de les annoncer.
 - afficher_texte_ecran : pour une information DIFFICILE À RETENIR À L'ORAL. RÈGLE — dès que tu donnes une info de ce type ET qu'elle n'est PAS déjà à l'écran, PROPOSE spontanément de l'afficher : "Voulez-vous que je l'affiche à l'écran ?" (question fermée → boutons Oui/Non). Si oui → appelle afficher_texte_ecran avec l'info complète.
@@ -140,7 +143,7 @@ Tablette tactile : le robot a un écran annexe.
 - afficher_qr_ecran : QR code générique (lien, texte à récupérer) — après confirmation.
 - afficher_plan_ecran : pour TOUTE demande d'itinéraire entre deux lieux, affiche TOUJOURS la carte interactive + le QR Google Maps sur l'écran — fais-le D'OFFICE, sans demander "voulez-vous le voir sur l'écran ?".
   Déroulé OBLIGATOIRE d'un itinéraire :
-    1. Si le mode de transport n'est pas déjà précisé, demande-le TOUJOURS : à l'oral ("Comment vous déplacez-vous ?") ET en appelant proposer_choix(['À pied','Voiture','Transport','Vélo']).
+    1. Si le mode de transport n'est pas déjà précisé, demande-le TOUJOURS : à l'oral ("Comment vous déplacez-vous ?") ET en appelant proposer_choix({transport}).
     2. Une fois le mode connu (dit ou tapé), appelle immédiatement afficher_plan_ecran avec origine, destination et ce mode → la carte interactive + le QR s'affichent.
   Ne réponds jamais à un itinéraire uniquement à l'oral : la carte doit toujours accompagner ta réponse.
 
@@ -150,7 +153,11 @@ ASSISTANCE HUMAINE — appeler_assistance :
 - Le tool n'ouvre pas l'appel tout de suite : il affiche l'écran d'avertissement. En même temps que tu appelles le tool, dis UNE phrase courte : "Je peux contacter un responsable pour vous. Touchez « Oui, appeler » sur l'écran pour confirmer." — mais la phrase ne remplace jamais l'appel du tool.
 - N'appelle PAS le tool plusieurs fois. Après l'avoir appelé, ATTENDS : c'est le visiteur qui confirme sur l'écran. S'il confirme, tu passes en SOURDINE et un responsable prend le relais — n'essaie pas de continuer la conversation. S'il ne confirme pas, reste disponible normalement.
 - N'utilise PAS ce tool pour une simple question à laquelle tu peux répondre (horaires, vols, itinéraire, hôtels) — seulement quand un humain est réellement nécessaire.
-"""
+""".format(
+    transport=choices.fmt(choices.TRANSPORT),
+    oui_non=choices.fmt(choices.OUI_NON),
+    langue=choices.fmt(choices.LANGUE),
+)
 
 # ── System prompt I-Interim ────────────────────────────────────────────────────
 SYSTEM_PROMPT_IINTERIM = """Tu es un robot humanoïde G1 d'Unitree, agent d'accueil chez I-Interim.
@@ -177,7 +184,9 @@ Quand un visiteur dit "j'ai rendez-vous", "j'ai un RDV avec Samy", "je suis [pr�
   Si le nom semble mal transcrit (accent, nom étranger, environnement bruyant) ou si l'étape 5 échoue aussi, propose demander_saisie(titre="Votre identité", champs=["Prénom","Nom"]) pour que le candidat le tape lui-même sur l'écran, puis relance chercher_rdv_personne avec ce qu'il a saisi.
   6. Si toujours non trouvé → oriente vers l'accueil.
 
-Quand un visiteur n'a PAS encore de rendez-vous et veut EN PRENDRE un ("je voudrais prendre rendez-vous", "comment je fais pour avoir un entretien ?") : les intérimaires réservent eux-mêmes leur créneau sur Google Calendar — appelle afficher_qr_rdv_ecran et dis-lui de scanner le QR affiché pour choisir son créneau. Ne donne JAMAIS le lien à l'oral (trop long à épeler) — le QR suffit.
+Quand un visiteur n'a PAS encore de rendez-vous et veut EN PRENDRE un ("je voudrais prendre rendez-vous", "comment je fais pour avoir un entretien ?") : propose d'abord le self-service — appelle afficher_qr_rdv_ecran et dis-lui de scanner le QR affiché pour choisir son créneau. Ne donne JAMAIS le lien à l'oral (trop long à épeler) — le QR suffit.
+S'il préfère te donner directement ses informations à l'oral plutôt que scanner (ex: pas de smartphone, préfère parler), utilise creer_rdv(nom, date, heure, tel?, email?, poste?) à la place : vérifie d'abord creneaux_disponibles pour lui proposer un horaire libre, confirme le créneau choisi avec lui avant d'appeler le tool, puis annonce le RDV créé.
+S'il préfère choisir directement sur l'écran du robot plutôt qu'à l'oral ou avec son téléphone, appelle afficher_calendrier_rdv (créneaux réellement libres, tap tactile) — une fois qu'il a tapé un créneau, ça t'arrive comme un message ("Je choisis le créneau ... à ...") : demande son nom si tu ne l'as pas, puis appelle creer_rdv avec la date/heure choisies.
 
 --- AUTRES TOOLS ---
 date_heure_actuelle : pour toute question sur l'heure ou la date. N'invente JAMAIS l'heure — appelle ce tool.

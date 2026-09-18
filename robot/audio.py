@@ -55,14 +55,19 @@ def play_audio(pcm_bytes: bytes):
     dur = len(pcm_list) / (16000 * 2)
 
     t0 = time.time()
-    # sleep_time=0.05 : envoie les chunks rapidement (vs 1.0s par défaut)
-    # pour éviter le double-comptage qui bloquait le micro 2+ secondes trop longtemps.
-    play_pcm_stream(audio_client, pcm_list, 'chat', sleep_time=0.05)
+    # Pacing temps-réel : chunk_size/sleep_time doivent correspondre au débit
+    # réel (16kHz, 16-bit = 32000 octets/s), sinon les chunks arrivent plus
+    # vite que le temps de lecture et débordent le buffer audio du robot côté
+    # SDK — ça coupait les réponses longues en plein milieu de la phrase.
+    # Le micro reste libéré au bon moment via le time.sleep(remaining) plus bas.
+    _chunk_size = 32000  # 1s d'audio par chunk
+    play_pcm_stream(audio_client, pcm_list, 'chat',
+                     chunk_size=_chunk_size, sleep_time=_chunk_size / (16000 * 2))
 
     # Attendre uniquement le temps restant pour que l'audio finisse de jouer,
     # en tenant compte du temps déjà passé dans play_pcm_stream.
     elapsed = time.time() - t0
-    remaining = max(0.0, dur - elapsed + 0.15)
+    remaining = max(0.0, dur - elapsed + 0.5)
     time.sleep(remaining)
 
     audio_client.PlayStop('chat')

@@ -8,10 +8,12 @@ et retourne un résumé de ce que le robot voit.
 
 import json
 import time
+
+import ipc
 from tools.registry import register
 
-VISION_FILE  = "/tmp/vision_state.json"
-FACE_FILE    = "/tmp/face_id_state.json"
+VISION_FILE  = ipc.VISION_STATE
+FACE_FILE    = ipc.FACE_ID_STATE
 VISION_STALE = 15.0
 FACE_STALE   = 10.0
 

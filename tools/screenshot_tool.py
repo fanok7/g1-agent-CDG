@@ -19,9 +19,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 
+import ipc
 from tools.registry import register
 
-UGREEN_FRAME   = "/tmp/latest_ugreen.jpg"   # frame courante écrite par face_id.py
+UGREEN_FRAME   = ipc.UGREEN_FRAME   # frame courante écrite par face_id.py
 SCREENSHOT_DIR = "/home/unitree/g1_agent_interim/vision/Screenshot"
 FALL_RECIPIENT = "nael1919@gmail.com"        # destinataire des alertes de chute
 FIRE_RECIPIENT = "nael1919@gmail.com"        # destinataire des alertes de feu/fumée

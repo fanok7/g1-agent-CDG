@@ -1,34 +1,49 @@
 #!/usr/bin/env python3
 """
-vision/vision_server.py — Détection YOLO sur 2 caméras en parallèle.
+vision/vision_server.py — Réception des détections YOLO + visages, calculées
+à distance sur la Jetson Thor (GPU), fusion et exposition HTTP locale.
 
-Threads :
-  _capture_rs_loop  : lit RealSense (D435i) en continu        → _raw_rs
-  _yolo_ugreen_loop : YOLO toutes les 2s sur frame UGREEN      → _dets_ugreen
-                      (lit /tmp/latest_ugreen.jpg fourni par face_id.py)
-  _yolo_rs_loop     : YOLO toutes les 2s sur RealSense         → _dets_realsense
-  _merge_loop       : fusionne les 2 listes, écrit vision_state.json
+⚠️ Aucune inférence ne tourne plus ici. La RealSense D435i ET la caméra UGREEN
+(face_id) sont branchées sur la Jetson Thor (192.168.123.166), pas sur ce
+Jetson (Orin NX, pas de GPU CUDA utilisable pour onnxruntime) :
+  - vision/realsense_remote_push.py (Thor) POST chaque frame RealSense → /push_realsense
+  - vision/face_id/face_id.py (Thor, InsightFace + YOLO sur onnxruntime-gpu)
+    POST l'état visages, la frame UGREEN et les détections YOLO UGREEN →
+    /push_face_state, /push_ugreen_frame, /push_yolo_ugreen
+Ce script ne fait que recevoir ces push, fusionner UGREEN+RealSense et écrire
+vision_state.json — plus de thread YOLO local (_yolo_ugreen_loop retiré).
 
 IPC fichiers :
-  /tmp/latest_ugreen.jpg   → frame UGREEN écrite par face_id.py (lecture seule ici)
-  /tmp/vision_state.json   → {"objects":[{label,conf,x,y,cam}], "ts":…}
-  /tmp/vision_pause        → RPS game : stoppe la capture RealSense
+  /tmp/latest_ugreen.jpg    → frame UGREEN écrite par /push_ugreen_frame (POST distant depuis la Thor)
+  /tmp/latest_realsense.jpg → frame RealSense écrite par /push_realsense (POST distant depuis la Thor)
+  /tmp/face_id_state.json   → état visages écrit par /push_face_state (POST distant depuis la Thor)
+  /tmp/vision_state.json    → {"objects":[{label,conf,x,y,cam}], "ts":…}
+  /tmp/vision_pause         → RPS game : stoppe la capture RealSense
 
 HTTP (port 8080) :
   /stream            → MJPEG UGREEN annoté (relu depuis face_id)
   /stream/realsense  → MJPEG RealSense annoté
   /detections        → JSON détections courantes
+  /push_realsense    → POST (body = JPEG brut) — reçoit les frames RealSense depuis la Thor
+  /push_ugreen_frame → POST (body = JPEG brut) — reçoit les frames UGREEN depuis la Thor
+  /push_face_state   → POST (body = JSON) — reçoit l'état face_id depuis la Thor
 """
 
 import json
+import logging
 import os
+import sys
 import threading
 import time
 
+# Chemins IPC partagés avec l'agent : ce sous-processus est lancé par
+# chemin absolu, la racine du dépôt n'est donc pas sur sys.path.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import ipc
+
 import cv2
 import numpy as np
-from flask import Flask, Response
-from ultralytics import YOLO
+from flask import Flask, Response, request
 
 try:
     import pyrealsense2 as rs
@@ -43,33 +58,35 @@ except ImportError:
 USE_REALSENSE = True
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MODEL_PATH      = '/home/unitree/yolo26n.engine'
-UGREEN_FRAME    = '/tmp/latest_ugreen.jpg'    # fourni par face_id.py
-RS_FRAME        = '/tmp/latest_realsense.jpg' # fourni par _capture_rs_loop (partagé avec qr_tool)
-PAUSE_FILE      = '/tmp/vision_pause'
-STATE_FILE      = '/tmp/vision_state.json'
-QR_STATE_FILE   = '/tmp/qr_state.json'
+UGREEN_FRAME    = ipc.UGREEN_FRAME      # fourni par face_id.py
+RS_FRAME        = ipc.REALSENSE_FRAME   # fourni par _capture_rs_loop (partagé avec qr_tool)
+PAUSE_FILE      = ipc.VISION_PAUSE_FLAG
+STATE_FILE      = ipc.VISION_STATE
+QR_STATE_FILE   = ipc.QR_STATE
 QR_INTERVAL     = 1.0    # secondes entre deux tentatives de scan
 QR_COOLDOWN     = 30.0   # secondes avant de re-signaler le même code
 UV_BIN          = '/home/unitree/.local/bin/uv'
 QR_REPO         = '/home/unitree/QR_scan_tool'
 HTTP_PORT       = 8080
 WIDTH, HEIGHT   = 640, 480
-CONFIDENCE      = 0.50
-YOLO_INTERVAL   = 2.0
 MAX_OBJECTS     = 5
 QUALITY         = 75
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Les push depuis la Thor arrivent en continu (plusieurs par seconde) — le
+# log d'accès Werkzeug par défaut ("POST /push_... 204") noierait le reste
+# des logs de main.py sans rien apporter (pas d'erreur à surveiller ici, les
+# routes renvoient déjà des codes clairs en cas de problème).
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
 app   = Flask(__name__)
-model = YOLO(MODEL_PATH)
 
 _lock           = threading.Lock()
 _dets_ugreen    = []
 _dets_realsense = []
-_ann_ugreen     = None   # frame UGREEN annotée (pour HTTP stream)
+_ann_ugreen     = None   # frame UGREEN annotée objets (pour HTTP stream)
 _ann_realsense  = None   # frame RealSense annotée (pour HTTP stream)
-_raw_rs         = None   # dernière frame RealSense brute
+_ann_face       = None   # frame UGREEN annotée visages (pour HTTP stream /stream/face)
 
 
 # ── Écriture atomique ─────────────────────────────────────────────────────────
@@ -94,137 +111,23 @@ def _merge_and_write():
     _write_state(all_dets[:MAX_OBJECTS])
 
 
-# ── Thread YOLO UGREEN ────────────────────────────────────────────────────────
-
-def _yolo_ugreen_loop():
-    """YOLO sur la caméra UGREEN. Lit les frames depuis /tmp/latest_ugreen.jpg
-    (écrit par face_id.py) — aucune ouverture directe de /dev/video0."""
-    global _dets_ugreen, _ann_ugreen
-    print("[YOLO-UGREEN] Démarré", flush=True)
-
-    while True:
-        time.sleep(YOLO_INTERVAL)
-        if os.path.exists(PAUSE_FILE):
-            continue
-        if not os.path.exists(UGREEN_FRAME):
-            # face_id.py pas encore démarré : vider SEULEMENT les détections UGREEN,
-            # puis re-fusionner — surtout NE PAS faire _write_state([]) qui écraserait
-            # les détections RealSense toutes les 2s (clignotement de la vision).
-            with _lock:
-                _dets_ugreen = []
-            _merge_and_write()
-            continue
-        try:
-            frame = cv2.imread(UGREEN_FRAME)
-            if frame is None:
-                continue
-
-            results = model(frame, conf=CONFIDENCE, verbose=False)
-            r       = results[0]
-            ann     = r.plot()
-            dets    = []
-
-            if r.boxes is not None:
-                for box in r.boxes:
-                    cls  = int(box.cls[0])
-                    conf = float(box.conf[0])
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    dets.append({
-                        "label": model.names[cls],
-                        "conf":  round(conf, 2),
-                        "x":     (x1 + x2) // 2,
-                        "y":     (y1 + y2) // 2,
-                        "cam":   "ugreen",
-                    })
-
-            with _lock:
-                _dets_ugreen = dets
-                _ann_ugreen  = ann
-
-            _merge_and_write()
-            print(f"[YOLO-UGREEN] {len(dets)} objet(s)", flush=True)
-
-        except Exception as e:
-            print(f"[YOLO-UGREEN] Erreur : {e}", flush=True)
-            with _lock:
-                _dets_ugreen = []
-            _merge_and_write()
+# ── Réception YOLO UGREEN distante (calcul déporté sur la Thor) ─────────────
+# L'inférence YOLO ne tourne plus ici : face_id.py (Thor) fait déjà tourner
+# InsightFace sur la même frame UGREEN, avec un vrai GPU CUDA — on y a ajouté
+# l'inférence YOLO en plus (onnxruntime-gpu, même modèle yolo26n exporté en
+# .onnx) pour éviter une 2e capture caméra et réutiliser le GPU déjà en place.
+# Voir vision/face_id/face_id.py § YOLO. Ce Jetson ne fait plus que recevoir
+# le JSON de détections via /push_yolo_ugreen ci-dessous.
 
 
-# ── Thread capture RealSense ──────────────────────────────────────────────────
-
-def _capture_rs_loop():
-    """Capture RealSense en continu → /tmp/latest_realsense.jpg (partagé avec qr_tool).
-    Pas de YOLO sur la RealSense — réservée au scan QR à la demande."""
-    global _raw_rs
-    if not USE_REALSENSE:
-        return
-
-    # Auto-détection du premier device RealSense disponible
-    pipe = None
-    for attempt in range(10):
-        try:
-            ctx     = rs.context()
-            devices = ctx.query_devices()
-            if len(devices) == 0:
-                raise RuntimeError("aucun device RealSense détecté")
-            serial = devices[0].get_info(rs.camera_info.serial_number)
-            p   = rs.pipeline()
-            cfg = rs.config()
-            cfg.enable_device(serial)
-            cfg.enable_stream(rs.stream.color, WIDTH, HEIGHT, rs.format.bgr8, 30)
-            p.start(cfg)
-            pipe = p
-            print(f"[RS-CAPTURE] RealSense {serial} démarrée", flush=True)
-            break
-        except Exception as e:
-            if attempt < 9:
-                print(f"[RS-CAPTURE] Tentative {attempt+1}/10 ({e}) — retry 5s", flush=True)
-                time.sleep(5)
-            else:
-                print("[RS-CAPTURE] RealSense indisponible", flush=True)
-                return
-
-    _timeout_streak = 0
-
-    while True:
-        try:
-            if os.path.exists(PAUSE_FILE):
-                time.sleep(0.3)
-                continue
-            frames  = pipe.wait_for_frames(timeout_ms=5000)
-            color_f = frames.get_color_frame()
-            if not color_f:
-                continue
-            _timeout_streak = 0
-            frame = np.asanyarray(color_f.get_data())
-            with _lock:
-                _raw_rs = frame
-            # Écriture atomique du fichier partagé (lu par qr_tool et le stream HTTP)
-            tmp = RS_FRAME.replace(".jpg", "_tmp.jpg")
-            cv2.imwrite(tmp, frame, [cv2.IMWRITE_JPEG_QUALITY, QUALITY])
-            os.replace(tmp, RS_FRAME)
-        except Exception as e:
-            print(f"[RS-CAPTURE] Erreur : {e}", flush=True)
-            _timeout_streak += 1
-            if _timeout_streak >= 3:
-                # 3 timeouts consécutifs → hardware_reset et reprise
-                print("[RS-CAPTURE] 3 timeouts — hardware_reset...", flush=True)
-                try:
-                    pipe.stop()
-                    ctx2 = rs.context()
-                    devs = ctx2.query_devices()
-                    if len(devs) > 0:
-                        devs[0].hardware_reset()
-                    time.sleep(4)
-                    pipe.start(cfg)
-                    print("[RS-CAPTURE] Reprise après reset", flush=True)
-                except Exception as re:
-                    print(f"[RS-CAPTURE] Reset échoué ({re}) — retry 5s", flush=True)
-                    time.sleep(5)
-                _timeout_streak = 0
-            else:
-                time.sleep(1)
+# ── Réception RealSense distante (caméra branchée sur la Thor) ──────────────
+# La D435i n'est plus sur ce Jetson : plus de pipeline pyrealsense2 local ici.
+# vision/realsense_remote_push.py tourne sur la Thor et POST chaque frame JPEG
+# sur /push_realsense (voir route Flask plus bas) — on se contente de l'écrire
+# telle quelle dans RS_FRAME, atomiquement, comme le faisait l'ancienne capture
+# locale (même fichier lu par qr_tool.py et le stream MJPEG).
+_last_rs_push = 0.0
+RS_PUSH_STALE_SEC = 5.0   # au-delà, on considère la Thor déconnectée (logs)
 
 
 def _yolo_rs_loop():
@@ -347,7 +250,7 @@ def index():
     h1{{color:white;font-family:monospace;}}img{{border:2px solid #444;max-width:48%;}}
     .row{{display:flex;gap:12px;}}</style></head>
     <body><h1>Unitree G1 — YOLO dual-cam</h1>
-    <div class="row"><img src="/stream"><img src="/stream/realsense"></div>
+    <div class="row"><img src="/stream"><img src="/stream/realsense"><img src="/stream/face"></div>
     </body></html>'''
 
 @app.route('/stream')
@@ -360,20 +263,154 @@ def stream_realsense():
     return Response(_gen_realsense(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
+def _gen_face():
+    while True:
+        with _lock:
+            frame = _ann_face
+        if frame is None:
+            time.sleep(0.05)
+            continue
+        _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, QUALITY])
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+               + buf.tobytes() + b'\r\n')
+
+@app.route('/stream/face')
+def stream_face():
+    return Response(_gen_face(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
 @app.route('/detections')
 def detections():
     with _lock:
         return {"objects": list(_dets_ugreen) + list(_dets_realsense)}
 
 
+@app.route('/push_realsense', methods=['POST'])
+def push_realsense():
+    """Reçoit une frame JPEG brute depuis vision/realsense_remote_push.py (Thor)
+    et l'écrit à la place de l'ancienne capture locale — même fichier, même
+    contrat pour qr_tool.py et le stream /stream/realsense."""
+    global _last_rs_push
+    data = request.get_data()
+    if not data:
+        return ('empty body', 400)
+    try:
+        tmp = RS_FRAME + '.tmp'
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        os.replace(tmp, RS_FRAME)
+    except Exception as e:
+        print(f"[RS-PUSH] Erreur écriture : {e}", flush=True)
+        return ('write failed', 500)
+    _last_rs_push = time.time()
+    return ('', 204)
+
+
+@app.route('/push_ugreen_frame', methods=['POST'])
+def push_ugreen_frame():
+    """Reçoit une frame JPEG UGREEN brute depuis face_id.py (Thor) — remplace
+    l'ancienne écriture locale par face_id.py tournant sur ce même Jetson."""
+    data = request.get_data()
+    if not data:
+        return ('empty body', 400)
+    try:
+        tmp = UGREEN_FRAME + '.tmp'
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        os.replace(tmp, UGREEN_FRAME)
+    except Exception as e:
+        print(f"[UGREEN-PUSH] Erreur écriture : {e}", flush=True)
+        return ('write failed', 500)
+    return ('', 204)
+
+
+@app.route('/push_yolo_ugreen', methods=['POST'])
+def push_yolo_ugreen():
+    """Reçoit les détections YOLO UGREEN (JSON) depuis face_id.py (Thor) —
+    remplace l'ancien calcul local. Dessine aussi l'annotation pour /stream."""
+    global _dets_ugreen, _ann_ugreen
+    try:
+        dets = request.get_json(force=True)
+    except Exception:
+        return ('invalid json', 400)
+    if not isinstance(dets, list):
+        return ('invalid json', 400)
+
+    with _lock:
+        _dets_ugreen = dets
+
+    try:
+        frame = cv2.imread(UGREEN_FRAME) if os.path.exists(UGREEN_FRAME) else None
+        if frame is not None:
+            for d in dets:
+                x, y = d.get("x", 0), d.get("y", 0)
+                label = f"{d.get('label','?')} ({d.get('conf',0):.2f})"
+                cv2.circle(frame, (x, y), 6, (0, 255, 0), -1)
+                cv2.putText(frame, label, (x + 8, y), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6, (0, 255, 0), 2)
+            with _lock:
+                _ann_ugreen = frame
+    except Exception as e:
+        print(f"[YOLO-UGREEN-PUSH] Annotation échouée : {e}", flush=True)
+
+    _merge_and_write()
+    return ('', 204)
+
+
+@app.route('/push_face_state', methods=['POST'])
+def push_face_state():
+    """Reçoit l'état JSON face_id (visages détectés, avec bbox) depuis face_id.py
+    (Thor). Dessine aussi l'annotation pour /stream/face — remplace l'ancien
+    stream Flask local à face_id.py (port 8081 sur la Thor, retiré)."""
+    global _ann_face
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return ('invalid json', 400)
+    if data is None:
+        return ('invalid json', 400)
+    try:
+        tmp = ipc.FACE_ID_STATE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(data, f)
+        os.replace(tmp, ipc.FACE_ID_STATE)
+    except Exception as e:
+        print(f"[FACE-PUSH] Erreur écriture : {e}", flush=True)
+        return ('write failed', 500)
+
+    try:
+        frame = cv2.imread(UGREEN_FRAME) if os.path.exists(UGREEN_FRAME) else None
+        if frame is not None:
+            for face in data.get("faces", []):
+                bbox = face.get("bbox")
+                if not bbox or len(bbox) != 4:
+                    continue
+                x1, y1, x2, y2 = bbox
+                name = face.get("name", "Inconnu")
+                score = face.get("score", 0.0)
+                color = (0, 255, 0) if name != "Inconnu" else (0, 0, 255)
+                label = f"{name} ({score:.2f})" if name != "Inconnu" else "Inconnu"
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.rectangle(frame, (x1, y1 - 28), (x2, y1), color, -1)
+                cv2.putText(frame, label, (x1 + 5, y1 - 7),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            with _lock:
+                _ann_face = frame
+    except Exception as e:
+        print(f"[FACE-PUSH] Annotation échouée : {e}", flush=True)
+
+    return ('', 204)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    threading.Thread(target=_yolo_ugreen_loop, daemon=True).start()
-    threading.Thread(target=_capture_rs_loop,  daemon=True).start()
     threading.Thread(target=_yolo_rs_loop,     daemon=True).start()
     threading.Thread(target=_qr_scan_loop,     daemon=True).start()
     print(f"[VISION] Stream UGREEN     → http://192.168.123.164:{HTTP_PORT}/stream")
     print(f"[VISION] Stream RealSense  → http://192.168.123.164:{HTTP_PORT}/stream/realsense")
+    print(f"[VISION] Stream Face ID    → http://192.168.123.164:{HTTP_PORT}/stream/face")
     print(f"[VISION] Détections JSON   → http://192.168.123.164:{HTTP_PORT}/detections")
+    print(f"[VISION] RealSense reçue via POST sur /push_realsense (depuis la Thor, "
+          f"vision/realsense_remote_push.py doit y tourner)")
     app.run(host='0.0.0.0', port=HTTP_PORT, threaded=True)

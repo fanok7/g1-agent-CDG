@@ -327,6 +327,55 @@
   }
   #input-submit:active { transform: scale(0.95); box-shadow: 0 6px 16px rgba(123,44,191,.28); }
 
+  /* ── Calendrier interactif (afficher_calendrier_rdv) ── */
+  #calendar-view { flex-direction: column; align-items: center; justify-content: center; gap: clamp(10px, 1.6vh, 18px); width: 100%; height: 100%; }
+  #calendar-view h1 { font-size: clamp(1.4rem, 3.6vh, 2.1rem); margin: 0; color: var(--accent); text-align: center; }
+  #calendar-nav { display: flex; align-items: center; justify-content: center; gap: clamp(12px, 2vw, 22px); }
+  #calendar-date { font-size: clamp(1rem, 2.2vh, 1.2rem); font-weight: 600; color: var(--text-secondary); min-width: 14ch; text-align: center; }
+  #calendar-nav button {
+    font-family: inherit; font-size: clamp(1.2rem, 2.6vh, 1.6rem); font-weight: 700; line-height: 1;
+    border: 2px solid var(--card-border); border-radius: 50%; width: clamp(38px, 5vh, 48px); height: clamp(38px, 5vh, 48px);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    background: var(--bg-1); color: var(--text-primary); transition: transform .1s ease, opacity .15s ease;
+  }
+  #calendar-nav button:active { transform: scale(0.9); }
+  #calendar-nav button:disabled { opacity: .3; cursor: default; }
+  #calendar-slots {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: clamp(10px, 1.6vw, 16px);
+    max-width: min(94%, 720px); max-height: 55vh; overflow-y: auto; padding: 4px;
+  }
+  .calendar-slot {
+    font-family: inherit; font-size: clamp(0.95rem, 2.1vh, 1.15rem); font-weight: 700;
+    border: none; border-radius: 16px; padding: clamp(12px, 2vh, 18px) clamp(18px, 2.6vw, 26px);
+    cursor: pointer; background: linear-gradient(135deg, #7B2CBF, #9D4EDD); color: var(--white);
+    box-shadow: 0 10px 22px rgba(123,44,191,.26); min-width: 84px;
+    transition: transform .1s ease, box-shadow .1s ease;
+    animation: choice-in var(--t-base) var(--ease) both;
+  }
+  .calendar-slot:active { transform: scale(0.95); box-shadow: 0 5px 14px rgba(123,44,191,.24); }
+  #calendar-empty { font-size: clamp(1rem, 2.2vh, 1.2rem); color: var(--text-secondary); text-align: center; }
+
+  /* ── Saisie libre (toujours disponible, en complément des boutons) ── */
+  #free-text-form {
+    display: flex; gap: clamp(8px, 1.4vw, 14px); align-items: center;
+    width: min(94%, 640px); margin: 0 auto; flex-shrink: 0;
+  }
+  #free-text-input {
+    flex: 1; font-family: inherit; font-size: clamp(0.95rem, 2vh, 1.1rem);
+    padding: clamp(10px, 1.6vh, 14px) clamp(14px, 1.8vw, 18px); border-radius: 14px;
+    border: 2px solid var(--card-border); background: var(--bg-1); color: var(--text-primary);
+    outline: none; transition: border-color .15s ease;
+  }
+  #free-text-input:focus { border-color: var(--accent); }
+  #free-text-send {
+    font-family: inherit; font-size: clamp(1.1rem, 2.2vh, 1.3rem); font-weight: 700;
+    border: none; border-radius: 14px; padding: clamp(10px, 1.6vh, 14px) clamp(16px, 2vw, 20px);
+    cursor: pointer; background: linear-gradient(135deg, #7B2CBF, #9D4EDD); color: var(--white);
+    box-shadow: 0 8px 18px rgba(123,44,191,.24); flex-shrink: 0;
+    transition: transform .1s ease, box-shadow .1s ease;
+  }
+  #free-text-send:active { transform: scale(0.92); box-shadow: 0 4px 10px rgba(123,44,191,.22); }
+
   /* ── Boutons tactiles dynamiques ── */
   #choice-buttons { display: none; gap: clamp(14px, 2vw, 22px); justify-content: center; flex-wrap: wrap; flex-shrink: 0; }
   #choice-buttons button {
@@ -490,9 +539,24 @@
             <button type="submit" id="input-submit"></button>
           </form>
         </div>
+        <div id="calendar-view" class="card-view">
+          <h1 id="calendar-titre"></h1>
+          <div id="calendar-nav">
+            <button type="button" id="calendar-prev" aria-label="Jour précédent">‹</button>
+            <div id="calendar-date"></div>
+            <button type="button" id="calendar-next" aria-label="Jour suivant">›</button>
+          </div>
+          <div id="calendar-slots"></div>
+          <div id="calendar-empty" style="display:none"></div>
+        </div>
       </div>
 
       <div id="choice-buttons"></div>
+
+      <form id="free-text-form">
+        <input type="text" id="free-text-input" autocomplete="off" placeholder="Tapez votre réponse...">
+        <button type="submit" id="free-text-send">➤</button>
+      </form>
 
       <div id="rating-footer">
         <div class="rating-block">
@@ -536,6 +600,7 @@ const planView  = document.getElementById('plan-view');
 const chatView  = document.getElementById('chat-view');
 const callView  = document.getElementById('call-view');
 const inputView = document.getElementById('input-view');
+const calendarView = document.getElementById('calendar-view');
 const statusEl  = document.getElementById('status');
 const aiStatusEl = document.getElementById('ai-status');
 const aiLabelEl  = document.getElementById('ai-label');
@@ -551,56 +616,56 @@ const I18N = {
         captionEmpty:'La conversation apparaîtra ici.', ratingLabel:'Votre avis :',
         merci:'Merci ! ✔️', qrText:'Scannez pour enregistrer cette liste dans vos notes',
         qrPlan:"Scannez pour ouvrir l'itinéraire dans Google Maps sur votre téléphone",
-        valider:'Valider' },
+        valider:'Valider', aucunCreneau:'Aucun créneau disponible ce jour-là.', tapezReponse:'Tapez votre réponse...' },
   en: { ecoute:'Listening...', reflechit:'Thinking...', parle:'Speaking...',
         headerTitle:'Assistant robot', idleTitle:"Hello! I'm listening",
         idleSub:'Ask me your question out loud',
         captionEmpty:'The conversation will appear here.', ratingLabel:'Your feedback:',
         merci:'Thank you! ✔️', qrText:'Scan to save this list to your notes',
         qrPlan:'Scan to open the route in Google Maps on your phone',
-        valider:'Submit' },
+        valider:'Submit', aucunCreneau:'No available slots that day.', tapezReponse:'Type your answer...' },
   es: { ecoute:'Escuchando...', reflechit:'Pensando...', parle:'Hablando...',
         headerTitle:'Robot asistente', idleTitle:'¡Hola! Le escucho',
         idleSub:'Hágame su pregunta en voz alta',
         captionEmpty:'La conversación aparecerá aquí.', ratingLabel:'Su opinión:',
         merci:'¡Gracias! ✔️', qrText:'Escanee para guardar esta lista en sus notas',
         qrPlan:'Escanee para abrir la ruta en Google Maps en su teléfono',
-        valider:'Enviar' },
+        valider:'Enviar', aucunCreneau:'No hay horarios disponibles ese día.', tapezReponse:'Escriba su respuesta...' },
   de: { ecoute:'Höre zu...', reflechit:'Denke nach...', parle:'Spreche...',
         headerTitle:'Assistenzroboter', idleTitle:'Hallo! Ich höre zu',
         idleSub:'Stellen Sie Ihre Frage laut',
         captionEmpty:'Das Gespräch erscheint hier.', ratingLabel:'Ihre Meinung:',
         merci:'Danke! ✔️', qrText:'Scannen, um diese Liste in Ihren Notizen zu speichern',
         qrPlan:'Scannen, um die Route in Google Maps auf Ihrem Handy zu öffnen',
-        valider:'Bestätigen' },
+        valider:'Bestätigen', aucunCreneau:'An diesem Tag sind keine Termine verfügbar.', tapezReponse:'Antwort eingeben...' },
   it: { ecoute:'In ascolto...', reflechit:'Sto pensando...', parle:'Sto parlando...',
         headerTitle:'Robot assistente', idleTitle:'Ciao! Ti ascolto',
         idleSub:'Fammi la tua domanda ad alta voce',
         captionEmpty:'La conversazione apparirà qui.', ratingLabel:'La tua opinione:',
         merci:'Grazie! ✔️', qrText:'Scansiona per salvare questa lista nelle tue note',
         qrPlan:'Scansiona per aprire il percorso in Google Maps sul telefono',
-        valider:'Conferma' },
+        valider:'Conferma', aucunCreneau:'Nessuno slot disponibile quel giorno.', tapezReponse:'Scrivi la tua risposta...' },
   ar: { ecoute:'أستمع...', reflechit:'أفكر...', parle:'أتحدث...',
         headerTitle:'روبوت مساعد', idleTitle:'مرحبا! أنا أستمع',
         idleSub:'اطرح سؤالك بصوت عالٍ',
         captionEmpty:'ستظهر المحادثة هنا.', ratingLabel:'رأيك:',
         merci:'شكرا! ✔️', qrText:'امسح لحفظ هذه القائمة في ملاحظاتك',
         qrPlan:'امسح لفتح المسار في خرائط جوجل على هاتفك',
-        valider:'تأكيد' },
+        valider:'تأكيد', aucunCreneau:'لا توجد مواعيد متاحة في ذلك اليوم.', tapezReponse:'اكتب إجابتك...' },
   zh: { ecoute:'正在聆听...', reflechit:'思考中...', parle:'正在说话...',
         headerTitle:'助理机器人', idleTitle:'您好！我在听',
         idleSub:'请大声说出您的问题',
         captionEmpty:'对话将显示在这里。', ratingLabel:'您的评价：',
         merci:'谢谢！✔️', qrText:'扫描将此列表保存到您的备忘录',
         qrPlan:'扫描以在手机的谷歌地图中打开路线',
-        valider:'提交' },
+        valider:'提交', aucunCreneau:'当天没有可用时段。', tapezReponse:'输入您的回答...' },
   ja: { ecoute:'聞いています...', reflechit:'考えています...', parle:'話しています...',
         headerTitle:'アシスタントロボット', idleTitle:'こんにちは！お聞きします',
         idleSub:'質問を声に出してください',
         captionEmpty:'会話がここに表示されます。', ratingLabel:'ご評価：',
         merci:'ありがとうございます！✔️', qrText:'このリストをメモに保存するにはスキャン',
         qrPlan:'スマホのGoogleマップでルートを開くにはスキャン',
-        valider:'送信' },
+        valider:'送信', aucunCreneau:'その日は空き枠がありません。', tapezReponse:'回答を入力...' },
 };
 let currentLang = 'fr';
 let currentStatus = 'ecoute';
@@ -615,6 +680,7 @@ function applyLang() {
   if (el('.idle-title')) el('.idle-title').textContent = t('idleTitle');
   if (el('.idle-sub'))   el('.idle-sub').textContent   = t('idleSub');
   if (el('#rating-footer .label')) el('#rating-footer .label').textContent = t('ratingLabel');
+  if (el('#free-text-input')) el('#free-text-input').placeholder = t('tapezReponse');
   if (el('#rating-merci')) el('#rating-merci').textContent = t('merci');
   if (el('.plan-caption')) el('.plan-caption').textContent = t('qrPlan');
   const lt = document.getElementById('loading-text'); if (lt) lt.textContent = t('loading');
@@ -1037,6 +1103,20 @@ function setAiStatus(status) {
 // n'a pas de micro/voix à elle : le vrai robot a déjà les siens (micro,
 // haut-parleur, IA de conversation dans main.py/events.py). Ici, on
 // n'envoie que la réponse d'un tap tactile, en alternative à l'oral.
+// Saisie libre : toujours disponible, indépendamment des boutons proposés —
+// utile quand la question n'a pas de forme oui/non (ex: "QR code ou vocal ?"
+// alors que le réflexe code n'a affiché que Oui/Non par erreur, ou toute
+// réponse qui ne rentre pas dans un bouton prédéfini). Même chemin que les
+// boutons/le clavier structuré : sendResponse() → /respond → input_queue.
+document.getElementById('free-text-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const inp = document.getElementById('free-text-input');
+  const value = inp.value.trim();
+  if (!value) return;
+  inp.value = '';
+  sendResponse(value);
+});
+
 function sendResponse(text) {
   setChoices([]);  // masquage optimiste — évite un double-clic pendant l'aller-retour réseau
   showToast('✓');  // feedback tactile immédiat
@@ -1078,14 +1158,9 @@ function iconFor(label) {
 // par le robot → on TRADUIT l'affichage dans la langue courante. La valeur
 // renvoyée au robot reste le libellé d'origine (il la comprend). Les libellés
 // libres d'un proposer_choix (déjà dans la bonne langue) ne matchent pas → tels quels.
-const CHOICE_LABELS = {
-  'Oui':       { fr:'Oui', en:'Yes', es:'Sí', de:'Ja', it:'Sì', ar:'نعم', zh:'是', ja:'はい' },
-  'Non':       { fr:'Non', en:'No', es:'No', de:'Nein', it:'No', ar:'لا', zh:'否', ja:'いいえ' },
-  'À pied':    { fr:'À pied', en:'On foot', es:'A pie', de:'Zu Fuß', it:'A piedi', ar:'سيرًا', zh:'步行', ja:'徒歩' },
-  'Voiture':   { fr:'Voiture', en:'By car', es:'En coche', de:'Auto', it:'In auto', ar:'سيارة', zh:'开车', ja:'車' },
-  'Transport': { fr:'Transport', en:'Transit', es:'Transporte', de:'ÖPNV', it:'Trasporti', ar:'مواصلات', zh:'公共交通', ja:'公共交通' },
-  'Vélo':      { fr:'Vélo', en:'By bike', es:'En bici', de:'Fahrrad', it:'In bici', ar:'دراجة', zh:'自行车', ja:'自転車' },
-};
+// Injectée par le serveur depuis choices.py (source unique, partagée avec le
+// prompt système et le schéma du tool proposer_choix) — ne pas recopier ici.
+const CHOICE_LABELS = {{ choice_labels | safe }};
 function displayLabel(label) {
   const m = CHOICE_LABELS[label];
   return (m && (m[currentLang] || m.en)) || label;
@@ -1125,7 +1200,7 @@ function flushChoices() {
 }
 
 // Cross-fade : une seule vue active à la fois (les autres se fondent en sortie).
-const CARD_VIEWS = [idleEl, textView, qrView, planView, inputView, chatView, callView];
+const CARD_VIEWS = [idleEl, textView, qrView, planView, inputView, calendarView, chatView, callView];
 function showView(el) {
   CARD_VIEWS.forEach(v => v.classList.toggle('is-active', v === el));
 }
@@ -1170,6 +1245,86 @@ document.getElementById('input-form').addEventListener('submit', (e) => {
   sendResponse(parts.join('. ') + '.');
 });
 
+// Calendrier interactif (afficher_calendrier_rdv) : un bouton par créneau
+// libre, calé sur _free_slots de calendar_tool.py (même source de vérité que
+// le tool). Le tap repart EXACTEMENT comme un choix/clavier (sendResponse) —
+// le serveur ne connaît pas le sens du texte, seul le LLM l'interprète.
+// Navigation jour par jour (flèches) : appelle /api/rdv-slots DIRECTEMENT,
+// sans repasser par le robot/LLM — instantané, borné à [min_date_iso,
+// max_date_iso] (~3 semaines, fixé par afficher_calendrier_rdv), et saute
+// automatiquement les jours fermés (week-end) plutôt que d'afficher une
+// page vide sur laquelle il n'y aurait rien à taper.
+let _calNav = null;   // { date_iso, min, max } de la vue calendrier courante
+
+function renderCalendarView(state) {
+  document.getElementById('calendar-titre').textContent = state.titre || '';
+  _calNav = { date_iso: state.date_iso, min: state.min_date_iso, max: state.max_date_iso };
+  renderCalendarDay(state);
+}
+
+function renderCalendarDay(state) {
+  document.getElementById('calendar-date').textContent = state.date_label || '';
+  const container = document.getElementById('calendar-slots');
+  const emptyEl = document.getElementById('calendar-empty');
+  container.innerHTML = '';
+  const slots = state.slots || [];
+  if (slots.length === 0) {
+    container.style.display = 'none';
+    emptyEl.style.display = 'block';
+    emptyEl.textContent = t('aucunCreneau') || 'Aucun créneau disponible ce jour-là.';
+  } else {
+    container.style.display = 'flex';
+    emptyEl.style.display = 'none';
+    slots.forEach((slot, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'calendar-slot';
+      btn.textContent = slot;
+      btn.style.animationDelay = (i * 30) + 'ms';
+      btn.addEventListener('click', () => {
+        sendResponse(`Je choisis le créneau ${state.date_label} à ${slot}.`);
+      });
+      container.appendChild(btn);
+    });
+  }
+  const prevBtn = document.getElementById('calendar-prev');
+  const nextBtn = document.getElementById('calendar-next');
+  if (_calNav) {
+    prevBtn.disabled = !_calNav.min || _calNav.date_iso <= _calNav.min;
+    nextBtn.disabled = !_calNav.max || _calNav.date_iso >= _calNav.max;
+  }
+}
+
+async function _navigateCalendar(deltaDays) {
+  if (!_calNav) return;
+  const btn = deltaDays < 0 ? document.getElementById('calendar-prev') : document.getElementById('calendar-next');
+  if (btn.disabled) return;
+  let d = new Date(_calNav.date_iso + 'T12:00:00');   // midi : jamais de décalage de jour par fuseau
+  // Avance/recule d'un jour à la fois et SAUTE les jours fermés (l'API renvoie
+  // closed:true) — jusqu'à 8 essais pour ne pas boucler indéfiniment si la
+  // fenêtre entière est fermée (ne devrait jamais arriver avec _SAMY_HOURS).
+  for (let tries = 0; tries < 8; tries++) {
+    d.setDate(d.getDate() + deltaDays);
+    const iso = d.toISOString().slice(0, 10);
+    if (_calNav.min && iso < _calNav.min) return;
+    if (_calNav.max && iso > _calNav.max) return;
+    try {
+      const r = await fetch('/api/rdv-slots?date=' + iso);
+      const data = await r.json();
+      if (data.error) return;
+      _calNav.date_iso = iso;
+      if (data.closed) continue;   // jour fermé → essaie le suivant dans la même direction
+      renderCalendarDay({ date_label: data.date_label, date_iso: data.date_iso, slots: data.slots });
+      return;
+    } catch (e) {
+      return;
+    }
+  }
+}
+
+document.getElementById('calendar-prev').addEventListener('click', () => _navigateCalendar(-1));
+document.getElementById('calendar-next').addEventListener('click', () => _navigateCalendar(1));
+
 function renderContent(state) {
   if (state.type === 'text') {
     document.getElementById('text-titre').textContent   = state.titre || '';
@@ -1208,6 +1363,9 @@ function renderContent(state) {
   } else if (state.type === 'input') {
     renderInputView(state);
     showView(inputView);
+  } else if (state.type === 'calendar') {
+    renderCalendarView(state);
+    showView(calendarView);
   } else {
     showView(idleEl);
   }

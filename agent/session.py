@@ -46,7 +46,10 @@ async def connect():
                     },
                     'turn_detection': {
                         'type': 'semantic_vad',
-                        'interrupt_response': True,
+                        # False : le robot doit toujours finir sa phrase avant de
+                        # réécouter — pas de barge-in (coupure par un bruit ambiant
+                        # ou une reprise de parole pendant que le robot répond).
+                        'interrupt_response': False,
                         # En mode interprète (daneel), la réponse n'est PAS auto :
                         # events.py injecte l'instruction de traduction puis envoie
                         # response.create lui-même. Sinon la réponse part avant

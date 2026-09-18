@@ -139,7 +139,7 @@ de la tablette ne perd ni la conversation ni un appel en cours.
 | `/events` | GET | Le flux SSE |
 | `/ping` | GET | Sonde de vie — sert à détecter un `main.py` mort |
 | `/respond` | POST | Tap sur un bouton → injecté dans la conversation Realtime **comme si c'était dit au micro** (via `agent.text_input.input_queue`) |
-| `/api/rating` | POST | Note 1–5 → CSV `statistiques_robot.csv` + `analytics.log_rating` |
+| `/api/rating` | POST | Note 1–5 → `analytics.log_rating` (télémétrie anonyme) |
 | `/call/start` | POST | **Seul** déclencheur réel d'un appel d'assistance (toujours après confirmation) |
 | `/call/end` | POST | Raccroche : retire `/tmp/ai_paused`, ferme le salon |
 | `/assist/cancel` | POST | Le visiteur a refusé l'appel → oublie la demande en attente |
@@ -211,9 +211,8 @@ Autre garde-fou : l'overlay « Réflexion » se retire de force après 15 s (`_l
 
 ### Notation
 
-Barre d'étoiles en bas → `POST /api/rating` → ligne dans
-`tablet_server/statistiques_robot.csv` (`Horodatage, Note, Question, Reponse`) **et**
-`analytics.log_rating`. Restitution dans le dashboard Streamlit — voir
+Barre d'étoiles en bas → `POST /api/rating` → `analytics.log_rating` (note + zone
+déduite de la question, sans identité). Restitution dans le dashboard Streamlit — voir
 [DASHBOARD.md](DASHBOARD.md) et [STATISTIQUES.md](STATISTIQUES.md).
 
 ---
@@ -243,20 +242,21 @@ n'est joignable que depuis le réseau du robot.
 ## 6. Démarrage
 
 Rien ne s'affiche tant que **`main.py` ne tourne pas** — c'est lui qui porte le serveur du
-port 8000. Trois modes possibles ; **aujourd'hui le robot est en mode manuel.**
+port 8000. Deux modes possibles ; **aujourd'hui le robot est en mode manuel.**
 
 | Mode | Port 8000 tenu par | État actuel |
 |------|--------------------|-------------|
 | **Manuel** | `main.py` uniquement | ✅ **en service** |
-| Launcher (page « Démarrer ») | `launcher_server.py` puis `main.py` | `g1-launcher` installé mais **désactivé** |
 | Auto-start | `main.py` sous systemd | `g1-main.service` **pas installé** (fichier présent dans `scripts/`) |
 
-Les commandes des trois modes sont dans le [README](README.md#lancement).
+Les commandes des deux modes sont dans le [README](README.md#lancement).
 
-⚠️ **Les modes s'excluent** : deux d'entre eux veulent le port 8000. Si `g1-launcher` et
-`g1-main` sont actifs en même temps, l'un des deux crashe en boucle sur
-`Address already in use`. `scripts/installer_autostart.sh` désactive le launcher
-justement pour ça.
+⚠️ **Les modes s'excluent** : ils veulent tous les deux le port 8000. Si `g1-main` est
+actif et qu'on lance `main.py` à la main, le second crashe sur `Address already in use`.
+
+> Un troisième mode a existé (`launcher_server.py` + `g1-launcher.service` : une page
+> « Démarrer » qui occupait le port 8000 tant que `main.py` ne tournait pas). Supprimé —
+> il dupliquait le lancement et se disputait le port avec `main.py`.
 
 ---
 
@@ -278,7 +278,7 @@ justement pour ça.
 | L'IA ne parle plus après un appel | Verrou `/tmp/ai_paused` resté | `rm /tmp/ai_paused` (nettoyé aussi au démarrage de `main.py`) |
 | Appel jamais lancé après « Oui » | Webhook n8n / clé Daily | `cat /tmp/assist_debug.log` ; `DAILY_API_KEY` dans `~/.env` |
 | Fully ne démarre pas au boot | Optimisation batterie / Launch on Boot | Revoir les 5 réglages du § 2 |
-| Adresse déjà utilisée au lancement | `g1-launcher` ou un ancien `main.py` tient le port | `sudo systemctl stop g1-launcher` ; `pkill -f g1_agent_interim/main.py` |
+| Adresse déjà utilisée au lancement | `g1-main` ou un ancien `main.py` tient le port | `sudo systemctl stop g1-main` ; `pkill -f g1_agent_interim/main.py` |
 
 **Réflexe de diagnostic** — dans l'ordre, ça isole la panne en 30 secondes :
 
@@ -321,7 +321,7 @@ pour un usage bureau où les silences sont plus longs.
 ### Changer le port
 Trois endroits **à changer ensemble** : `TABLET_PORT` (`main.py`), `PORT`
 (`scripts/adb_reverse_tablet.sh`), `_TABLET_PORT` (`tools/tablet_tools.py`) — plus la
-Start URL de Fully et `PORT` dans `launcher_server.py`.
+Start URL de Fully.
 
 ### Nettoyer les fichiers générés
 `tablet_server/static/{qrcodes,plans,notes}/` grossissent à chaque QR, plan et note, sans
@@ -335,8 +335,7 @@ client, et casse la portabilité en démo. L'USB reste le mode de référence.
 
 ### Pistes plus ambitieuses
 - **Autonomie d'affichage** : la tablette ne montre rien tant que `main.py` n'est pas
-  lancé. Le launcher (§ 6) répond en partie ; activer `g1-main.service` réglerait le
-  sujet définitivement
+  lancé. Activer `g1-main.service` (§ 6) réglerait le sujet définitivement
 - **Deuxième écran** : `_open_tablet_display()` (`main.py`) ouvre déjà Chromium en kiosque
   sur un écran branché au Jetson. Les deux affichages peuvent coexister — le SSE est
   multi-abonnés
@@ -351,13 +350,11 @@ client, et casse la portabilité en démo. L'USB reste le mode de référence.
 |--------|------|
 | `tablet_server/server.py` | Serveur FastAPI + SSE, toutes les routes et `push_*` |
 | `tablet_server/templates/index.html` | Toute l'interface (HTML+CSS+JS) |
-| `tablet_server/static/{qrcodes,plans,notes}/` | Fichiers générés par les tools |
-| `tablet_server/statistiques_robot.csv` | Historique des notes |
+| `tablet_server/static/{qrcodes,plans,notes}/` | Fichiers générés par les tools — **vidés au démarrage de `main.py`** |
 | `tablet_server/analytics_events.jsonl` | Journal télémétrie anonyme |
 | `tools/tablet_tools.py` | Les 5 tools d'écran |
 | `tools/assistance_tool.py` | Appel d'assistance (voir [ASSISTANCE.md](ASSISTANCE.md)) |
 | `scripts/adb_reverse_tablet.sh` + `.service` | Persistance du tunnel USB |
-| `launcher_server.py` + `scripts/g1-launcher.service` | Page « Démarrer » |
 | `scripts/g1-main.service` + `installer_autostart.sh` | Mode auto-start |
 | `/tmp/tablet_client.log` | Journal du navigateur de la tablette |
 | `/tmp/assist_debug.log` | Trace des demandes d'assistance |

@@ -57,15 +57,17 @@ corriger. Barres colorées : rouge ≤ 2,5 ★, orange ≤ 3,5 ★, vert au-dess
 
 | Fichier | Contenu |
 |---|---|
-| `tablet_server/analytics_events.jsonl` | tous les événements (1 JSON/ligne) — **source du dashboard** |
-| `tablet_server/statistiques_robot.csv` | historique brut des avis (sauvegarde) |
+| `tablet_server/analytics_events.jsonl` | tous les événements (1 JSON/ligne) — **source unique du dashboard** |
 
-Les deux sont **gitignorés** (données locales, non versionnées).
+**Gitignoré** (données locales, non versionnées).
+
+> Un `statistiques_robot.csv` doublait autrefois les avis en parallèle du `.jsonl`.
+> Aucun code ne le lisait (le dashboard ne lit que le `.jsonl`) : il a été supprimé.
 
 **Repartir de zéro** (efface tout l'historique de stats) :
 
 ```bash
-rm tablet_server/analytics_events.jsonl tablet_server/statistiques_robot.csv
+rm tablet_server/analytics_events.jsonl
 
 bonjour
 ```
