@@ -23,6 +23,18 @@ except Exception:
 import choices
 import config as _config
 import ipc
+
+# Logs verbeux (statuts internes, args de tools, régénérations de langue...) —
+# masqués par défaut. Le terminal ne garde que : transcription audio (user +
+# robot) et personnes détectées par la vision (§ [Toi]/[G1]/[FACE] ci-dessous),
+# plus les vraies erreurs ([TOOL] Erreur / [ERREUR], jamais masquées). Pour
+# tout réafficher (debug) : G1_VERBOSE_LOGS=1.
+_VERBOSE_LOGS = os.environ.get('G1_VERBOSE_LOGS', '0') == '1'
+
+
+def _vprint(*args, **kwargs):
+    if _VERBOSE_LOGS:
+        print(*args, **kwargs)
 # Mode interprète (Daneel) : chaque phrase fr/zh est traduite dans l'autre langue.
 TRANSLATE_MODE = _config.TRANSLATE_MODE
 
@@ -35,6 +47,33 @@ _AI_PAUSED_FLAG   = ipc.AI_PAUSED_FLAG
 from robot import call_audio as _call_audio   # pont audio de l'appel (micro/HP robot)
 _FACE_STATE_FILE  = ipc.FACE_ID_STATE
 _FACE_STALE_SECS  = 5.0
+
+# Coupure du micro en l'absence de visage détecté (voir send_audio_loop) — ne
+# bloque que le DÉMARRAGE d'une écoute, jamais une conversation déjà engagée.
+# Fail-open si face_id est indisponible ou périmé (Thor injoignable,
+# vision_server down...) : mieux vaut un micro actif à tort qu'un robot muet à
+# cause d'une panne vision annexe.
+#
+# La fenêtre "conversation en cours" part de _last_voice_activity, alimentée par
+# le VAD du serveur (speech_started / transcription), PAS par l'envoi des chunks :
+# avec MIC_RMS_THRESHOLD=0 (cas par défaut), le micro envoie en permanence, donc
+# une fenêtre basée sur l'envoi se renouvelait à chaque chunk et le micro ne se
+# fermait plus jamais. Fenêtre large : une phrase longue ne redéclenche pas
+# forcément speech_started, et couper en plein milieu serait pire que garder le
+# micro ouvert quelques secondes de trop.
+_MIC_PRESENCE_GRACE_S = 12.0
+_last_voice_activity  = 0.0   # dernier signe de parole réelle (VAD serveur)
+
+
+def _someone_present() -> bool:
+    try:
+        with open(_FACE_STATE_FILE) as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return True
+    if time.time() - state.get('ts', 0) > _FACE_STALE_SECS:
+        return True
+    return bool(state.get('faces'))
 _RPS_GO_SIGNAL    = ipc.RPS_GO
 _RPS_GO_LEAD      = 0.1   # avance (s) sur la fin du TTS — compense le mouvement des doigts
 _FALL_STATE_FILE  = ipc.FALL_STATE
@@ -203,33 +242,6 @@ def _asks_body_state(text):
     return any(p in t for p in _BODY_STATE_PHRASES)
 
 
-# Réflexe code (mode iinterim uniquement) : un visiteur qui veut PRENDRE un
-# nouveau RDV doit se voir proposer le self-service (QR ou calendrier tactile)
-# EN PREMIER — consigne écrite dans config.py, mais le modèle "mini" l'oublie
-# régulièrement en pratique et part direct sur un échange oral (nom/date à la
-# main), constaté sur le terrain. On force donc l'instruction par le code,
-# même mécanisme que pour etat_de_mon_corps.
-# Distinction importante : "je veux PRENDRE rendez-vous" (nouveau, ce bloc) vs
-# "j'AI rendez-vous" (déjà pris, flux chercher_rdv_personne — ne pas confondre).
-_RDV_WORDS = ("rendez-vous", "rendez vous", " rdv", "entretien")
-# Tournures qui indiquent un RDV DÉJÀ pris (flux chercher_rdv_personne, pas
-# celui-ci) — l'exclusion prime toujours sur la simple présence d'un mot RDV.
-_EXISTING_RDV_PHRASES = (
-    "j'ai rendez-vous", "j'ai un rendez-vous", "j'ai rdv", "j'ai un rdv",
-    "mon rendez-vous", "mon rdv", "mon entretien",
-    "je suis venu pour mon", "je viens pour mon",
-    "quand est mon", "à quelle heure est mon", "a quelle heure est mon",
-    "confirmer mon", "vérifier mon", "verifier mon",
-)
-
-
-def _asks_new_rdv(text):
-    t = (text or "").strip().lower()
-    if any(p in t for p in _EXISTING_RDV_PHRASES):
-        return False   # a déjà un RDV → tout autre flux, pas celui-ci
-    return any(w in t for w in _RDV_WORDS)
-
-
 # Le robot PROPOSE de contacter un humain. Le modèle "mini" oublie souvent
 # d'appeler le tool appeler_assistance (il récite juste la phrase), donc l'écran
 # de confirmation ne s'affichait pas. On détecte la proposition DANS ce que le
@@ -387,11 +399,15 @@ _turn_user_lang = None       # langue détectée du tour courant (garde-fou hors
 _last_user_text = ""         # dernière phrase du visiteur → motif de l'écran d'assistance
 _assist_confirm_shown = False  # évite de réafficher l'écran d'assistance en boucle
 _q_start = None              # horodatage de la question en cours (mesure de latence)
+_speech_started_ts = None    # horodatage du dernier VAD speech_started (diagnostic latence transcription)
 _fallback_turn = False       # ce tour a-t-il basculé en recherche web (fallback IA) ?
 _body_state_turn = False     # ce tour répond à une question sur l'état physique du robot
                               # (etat_de_mon_corps) → pas de réflexe assistance dessus
 _greeting_turn = False       # ce tour est la salutation proactive à un inconnu
                               # (face_greeting_loop) → pas de boutons Oui/Non dessus
+_turn_tool_calls = []        # tool_calls du tour en cours ({"name","args","status"}),
+                              # accumulés pour _analytics.log_turn (dataset fine-tuning) ;
+                              # reset à chaque nouvelle transcription utilisateur
 
 def _response_create(tool_name=None):
     msg = {'type': 'response.create'}
@@ -408,6 +424,8 @@ def _set_responding(state: bool):
             os.remove(_RESPONDING_FLAG)
         except FileNotFoundError:
             pass
+        with open(ipc.LAST_CONVERSATION_END, 'w') as f:
+            f.write(str(time.time()))
 
 
 # ── Salut automatique garanti par le CODE ─────────────────────────────────────
@@ -461,26 +479,81 @@ async def send_audio_loop(ws):
     (text_input_loop) reste utilisable sans micro."""
     loop = asyncio.get_event_loop()
     q = asyncio.Queue()
+    # État du seuil à hystérésis (voir commentaire dans cb) — mutable via liste
+    # pour rester modifiable depuis la closure du callback (thread audio).
+    _gate = {'open': False, 'last_above': 0.0}
+    _HANGOVER_S = 0.5  # garde le micro ouvert 500ms après le dernier son fort
 
     def cb(indata, frames, t, status):
         data = indata[::2] if MICRO_SR == 48000 else indata
-        pcm = (data * 32767).astype(np.int16).tobytes()
-        loop.call_soon_threadsafe(q.put_nowait, pcm)
+        samples = np.clip(data * 32767 * _config.MIC_GAIN, -32768, 32767).astype(np.int16)
+        # Seuil RMS À HYSTÉRÉSIS : un seuil brut (couper chaque chunk de 20ms sous
+        # le seuil) découpe aussi les creux naturels DANS une phrase (entre deux
+        # mots, syllabe faible) — le flux envoyé à l'API devient troué, ce qui
+        # confond le VAD sémantique côté serveur et gonfle fortement le délai
+        # avant transcription (observé : délais de plusieurs secondes à dizaines
+        # de secondes avec un seuil brut actif). Ici, une fois qu'un son fort a
+        # ouvert la porte, on la laisse ouverte _HANGOVER_S de plus avant de la
+        # refermer — les creux internes à une phrase ne coupent plus rien, seul
+        # un silence VRAIMENT prolongé (entre phrases, bruit de fond permanent)
+        # reste filtré. 0 = désactivé.
+        if _config.MIC_RMS_THRESHOLD > 0:
+            rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+            now = time.time()
+            if rms >= _config.MIC_RMS_THRESHOLD:
+                _gate['open'] = True
+                _gate['last_above'] = now
+            elif now - _gate['last_above'] > _HANGOVER_S:
+                _gate['open'] = False
+            if not _gate['open']:
+                return
+        loop.call_soon_threadsafe(q.put_nowait, samples.tobytes())
 
-    try:
-        stream = sd.InputStream(samplerate=MICRO_SR, channels=1, dtype='float32',
-                                 device=MICRO_INDEX, blocksize=int(MICRO_SR * 0.02),
-                                 callback=cb)
-        stream.start()
-    except Exception as e:
-        print(f'[MICRO] Indisponible ({e}) — micro désactivé pour cette session, '
-              f'utilise le clavier.')
-        return
+    # Retry court : à la reconnexion WS, cette boucle repart de zéro et retente
+    # d'ouvrir le micro pendant que l'ancien flux (connexion précédente) finit
+    # tout juste de se libérer côté ALSA (device exclusif) — sans retry, cette
+    # race condition désactivait le micro pour le reste de la session.
+    stream = None
+    for attempt in range(4):
+        try:
+            stream = sd.InputStream(samplerate=MICRO_SR, channels=1, dtype='float32',
+                                     device=MICRO_INDEX, blocksize=int(MICRO_SR * 0.02),
+                                     callback=cb)
+            stream.start()
+            break
+        except Exception as e:
+            if attempt == 3:
+                print(f'[MICRO] Indisponible ({e}) après {attempt + 1} tentatives — '
+                      f'micro désactivé pour cette session, utilise le clavier.')
+                return
+            await asyncio.sleep(0.5)
 
     print('[MICRO] Flux ouvert.')
+    _stream_open = True
     try:
         while True:
-            chunk = await q.get()
+            # Timeout : quand le flux est fermé, plus aucun chunk n'arrive, il faut
+            # quand même réévaluer la présence pour le rouvrir.
+            try:
+                chunk = await asyncio.wait_for(q.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                chunk = None
+            now = time.time()
+            busy = (os.path.exists(_RESPONDING_FLAG) or os.path.exists(_AI_PAUSED_FLAG)
+                    or now - _last_voice_activity <= _MIC_PRESENCE_GRACE_S)
+            present = busy or _someone_present()
+            if not present and _stream_open:
+                # Personne devant la caméra et pas de conversation : on ferme vraiment
+                # le flux ALSA (le micro n'est plus ouvert, pas seulement ignoré).
+                stream.stop()
+                _stream_open = False
+                print('[MICRO] Fermé — aucune personne détectée devant la caméra.')
+            elif present and not _stream_open:
+                stream.start()
+                _stream_open = True
+                print('[MICRO] Ouvert — présence détectée.')
+            if chunk is None:
+                continue
             if os.path.exists(_RESPONDING_FLAG):
                 continue
             if os.path.exists(_AI_PAUSED_FLAG):
@@ -527,12 +600,34 @@ async def receive_events_loop(ws):
     _results = []   # [(call_id, name, result)]               — prêts, batch courant
     _queued  = []   # [(call_id, name, result)]               — différés (robot parlait)
 
+    # Statut "écoute" poussé dès la connexion — sans ça, rien n'indique au
+    # visiteur que le robot écoute avant la toute première réponse complète,
+    # ce qui pousse à répéter sa phrase (et confond le VAD sémantique en
+    # retour, cf. délais de 70-90s observés en début de session).
+    led.ecoute()
+    if _TABLET_AVAILABLE:
+        push_status("ecoute")
+
     async for raw in ws:
         e = json.loads(raw)
         t = e.get('type', '')
 
         if t == 'input_audio_buffer.speech_started':
-            print('[Toi] Parle...')
+            _vprint('[Toi] Parle...')
+            # Retour visuel immédiat : LED "entend" (orange) dès que le VAD détecte
+            # une voix, distinct de "ecoute" (bleu, attente passive) et "reflechit"
+            # (vert, une fois la phrase finie) — confirme au visiteur que le robot
+            # l'entend en temps réel, pas seulement après coup. Pas de push_status
+            # tablette ici : le frontend n'a pas de style dédié pour ce 4e état.
+            led.entend()
+            # Horodatage du dernier segment de parole détecté par le VAD — sert à
+            # mesurer le délai jusqu'à la transcription (diagnostic latence, pas
+            # utilisé ailleurs). Écrasé à chaque détection : le VAD peut se
+            # redéclencher plusieurs fois sur une même phrase (pauses courtes).
+            globals()['_speech_started_ts'] = time.time()
+            # Quelqu'un parle vraiment → maintient le micro ouvert même si la
+            # caméra ne voit plus de visage (voir _MIC_PRESENCE_GRACE_S).
+            globals()['_last_voice_activity'] = time.time()
             # Pas de barge-in : le robot doit finir sa phrase avant de réécouter.
             # Le micro n'envoie déjà rien pendant qu'il parle (_RESPONDING_FLAG,
             # send_audio_loop) — cet event ne peut donc venir que d'audio envoyé
@@ -540,13 +635,29 @@ async def receive_events_loop(ws):
 
         elif t == 'conversation.item.input_audio_transcription.completed':
             transcript = e.get("transcript", "")
-            print(f'[Toi] {transcript}')
+            _sst = globals().get('_speech_started_ts')
+            if _sst is not None:
+                print(f'[Toi] {transcript}  (VAD→transcription : {int((time.time() - _sst) * 1000)}ms)')
+            else:
+                print(f'[Toi] {transcript}')
             if transcript:
+                # Ferme le micro DÈS la transcription, pas seulement au premier delta
+                # audio (_set_responding(True) plus bas, idempotent) : entre la fin de
+                # la transcription et le début de la réponse (1-3s de "réflexion"), le
+                # micro restait ouvert — un visiteur qui reparlait dans cette fenêtre se
+                # faisait transcrire et déclenchait un 2e tour pendant que le 1er était
+                # encore en cours côté API ('conversation_already_has_active_response'),
+                # d'où des réponses décousues/hors-sujet (deux tours mélangés dans le
+                # contexte du modèle). _set_responding(False) au response.done referme
+                # la boucle normalement.
+                _set_responding(True)
+                globals()['_last_voice_activity'] = time.time()
                 globals()['_last_user_text'] = transcript   # motif de l'écran d'assistance
                 # Départ du chrono latence : la question est enregistrée à la FIN
                 # de la réponse du robot (pour mesurer latency_ms + is_fallback).
                 globals()['_q_start'] = time.time()
                 globals()['_fallback_turn'] = False
+                globals()['_turn_tool_calls'] = []   # nouveau tour → reset (dataset)
             if transcript:
                 globals()['_body_state_turn'] = not TRANSLATE_MODE and _asks_body_state(transcript)
             if transcript and not TRANSLATE_MODE and _asks_body_state(transcript):
@@ -565,22 +676,6 @@ async def receive_events_loop(ws):
                                                   "l'oral ; NE PROPOSE PAS d'appeler un responsable et "
                                                   "N'APPELLE PAS le tool appeler_assistance pour ça — "
                                                   "ce n'est pas un motif d'assistance visiteur."}]}
-                }))
-            if transcript and _config.ROBOT_MODE == "iinterim" and _asks_new_rdv(transcript):
-                # Le modèle part souvent direct sur un échange oral (nom/date à la
-                # main) sans jamais proposer le self-service — on le force à suivre
-                # l'ordre de priorité défini dans config.py.
-                await ws.send(json.dumps({
-                    'type': 'conversation.item.create',
-                    'item': {'type': 'message', 'role': 'user',
-                             'content': [{'type': 'input_text',
-                                          'text': "[SYSTÈME — instruction interne, n'y réponds pas] "
-                                                  "Le visiteur veut PRENDRE un nouveau rendez-vous (il n'en "
-                                                  "a pas encore). Tu DOIS d'abord appeler afficher_qr_rdv_ecran "
-                                                  "(self-service) — dis juste de scanner le QR affiché. "
-                                                  "N'appelle creer_rdv qu'ensuite, et seulement si le visiteur "
-                                                  "dit explicitement préférer donner ses informations à l'oral "
-                                                  "ou sur l'écran plutôt que scanner."}]}
                 }))
             if transcript and _TABLET_AVAILABLE:
                 push_chat("user", transcript)
@@ -619,7 +714,7 @@ async def receive_events_loop(ws):
         elif t == 'response.output_audio.delta':
             audio_buf.extend(base64.b64decode(e['delta']))
             if not responding:
-                print('[G1] Parle...')
+                _vprint('[G1] Parle...')
                 _set_responding(True)
                 send_emotion("parle")
                 led.parle()
@@ -705,6 +800,16 @@ async def receive_events_loop(ws):
                             latency_ms=_lat, is_fallback=_fb)
                     except Exception:
                         pass
+                    # Dataset de tours (texte brut, question+tool_calls+réponse) —
+                    # pour évaluer/fine-tuner le pipeline local. best-effort.
+                    try:
+                        _analytics.log_turn(
+                            _config.ROBOT_MODE, _last_user_text, text_buf,
+                            tool_calls=list(_turn_tool_calls),
+                            lang=_last_detected_lang or "fr",
+                            latency_ms=_lat, is_fallback=_fb)
+                    except Exception:
+                        pass
                     globals()['_q_start'] = None
                 if text_buf and _TABLET_AVAILABLE:
                     push_chat("assistant", text_buf)
@@ -729,7 +834,7 @@ async def receive_events_loop(ws):
                                 "motif": _last_user_text or "Demande d'assistance",
                                 "langue": _last_detected_lang or "fr",
                             })
-                            print("[ASSIST] Écran de confirmation affiché (réflexe code).")
+                            _vprint("[ASSIST] Écran de confirmation affiché (réflexe code).")
                     else:
                         globals()['_assist_confirm_shown'] = False
                     # Le modèle (mini) oublie souvent d'appeler proposer_choix après
@@ -750,8 +855,6 @@ async def receive_events_loop(ws):
                             # Choix entre options NOMMÉES ("QR code ou vocal ?") —
                             # ne PAS forcer Oui/Non, ça n'aurait aucun sens ici.
                             push_choices(_named_choices)
-                        elif _looks_like_yes_no(text_buf):
-                            push_choices(choices.OUI_NON)
                         else:
                             # Réponse qui n'est PAS une question fermée → on
                             # efface les boutons d'un tour précédent pour qu'ils
@@ -778,7 +881,7 @@ async def receive_events_loop(ws):
                 text_buf = ''
                 responding = False
                 _set_responding(False)
-                print('[G1] Écoute...')
+                _vprint('[G1] Écoute...')
 
         elif t == 'response.done':
             globals()['_turn_tgt'] = None   # garde-fou interprète : tour terminé
@@ -789,13 +892,20 @@ async def receive_events_loop(ws):
             # (ligne ~482) — un vrai nouveau tour, pas une régénération du même tour.
             # Ne pas retirer le flag si l'audio est encore en lecture :
             # play_audio dans l'executor s'en charge quand il termine.
-            if not _audio_playing:
-                responding = False
-                _set_responding(False)
-
             to_send = _queued + _results
             _queued.clear()
             _results.clear()
+            # Ne pas rouvrir le micro (_set_responding(False)) s'il reste un résultat
+            # de tool à envoyer : entre ce retrait de flag et l'envoi du prochain
+            # response.create (juste en dessous), le micro captait une nouvelle
+            # phrase, et comme create_response=True le serveur générait SA PROPRE
+            # réponse pour ce nouveau tour en même temps que notre response.create
+            # manuel du résultat de tool → collision 'conversation_already_has_
+            # active_response' côté API (observé le 2026-09-30).
+            if not _audio_playing and not to_send:
+                responding = False
+                _set_responding(False)
+
             if to_send:
                 forced = await _flush_results(ws, to_send)
                 if forced == 'demarrer_pfc':
@@ -837,7 +947,7 @@ async def receive_events_loop(ws):
                 # L'event .done porte les arguments complets — plus fiable que
                 # l'accumulation des deltas
                 args = json.loads(e.get('arguments') or entry['args'] or '{}')
-                print(f'[TOOL] Args : {args}')
+                _vprint(f'[TOOL] Args : {args}')
                 # Exécution dans un thread pool : ne bloque plus la boucle asyncio
                 result = await loop.run_in_executor(
                     None, lambda n=name, a=args: call_tool(n, a)
@@ -849,6 +959,15 @@ async def receive_events_loop(ws):
             # Statistique : service sollicité + statut (ok/error). best-effort.
             try:
                 _analytics.log_tool(name, _tool_status)
+            except Exception:
+                pass
+            # Accumulation pour le dataset de tours (log_turn, ci-dessous à la
+            # fin de la réponse) — texte brut (args), best-effort.
+            try:
+                _turn_tool_calls.append({
+                    "name": name, "args": locals().get('args'),
+                    "status": _tool_status,
+                })
             except Exception:
                 pass
 
@@ -943,7 +1062,7 @@ async def text_input_loop(ws):
                 break
             await asyncio.sleep(0.5)
 
-        print(f'[TEXTE] {text}')
+        _vprint(f'[TEXTE] {text}')
         await ws.send(json.dumps({
             'type': 'conversation.item.create',
             'item': {
@@ -1092,14 +1211,11 @@ async def qr_alert_loop(ws):
         try:
             with open(_QR_STATE_FILE) as f:
                 state = json.load(f)
+            os.remove(_QR_STATE_FILE)
         except (FileNotFoundError, json.JSONDecodeError):
             continue
         if time.time() - state.get('ts', 0) > _QR_STALE_SECS:
             continue
-        try:
-            os.remove(_QR_STATE_FILE)
-        except FileNotFoundError:
-            pass
         for _ in range(30):
             if not os.path.exists(_RESPONDING_FLAG):
                 break
@@ -1140,7 +1256,7 @@ async def face_greeting_loop(ws):
     # confirmation : inconnu_id → (embedding accumulé, count)
     _pending_unknowns: dict = {}
     UNKNOWN_SIM_THRESHOLD = 0.4   # même seuil qu'InsightFace — même personne si > 0.4
-    UNKNOWN_FORGET_SEC    = 6000.0  # oublier un inconnu après 10 min (resaluer s'il revient)
+    UNKNOWN_FORGET_SEC    = 600.0  # oublier un inconnu après 10 min (resaluer s'il revient)
     CONFIRM_FRAMES        = 3      # frames consécutives avant de saluer
     INCONNU_COOLDOWN      = 25.0  # cooldown post-conversation uniquement
 
@@ -1197,9 +1313,8 @@ async def face_greeting_loop(ws):
                 _greet_now()
                 if _config.ROBOT_MODE == "iinterim":
                     _known_instr = (
-                        f'[SYSTÈME] La caméra vient de détecter {name}. Dis "je suis '
-                        f'réceptionniste chez I-Interim", salue {name} par son prénom, '
-                        f'puis invite clairement {name} à te parler ou te poser une question.'
+                        f'[SYSTÈME] La caméra vient de détecter {name}. Salue {name} '
+                        f'par son prénom et demande-lui comment il/elle va aujourd\'hui.'
                     )
                 else:
                     _known_instr = (
@@ -1269,11 +1384,8 @@ async def face_greeting_loop(ws):
                 if _config.ROBOT_MODE == "iinterim":
                     _unknown_instr = (
                         '[SYSTÈME] La caméra vient de détecter une nouvelle personne '
-                        'inconnue devant toi. Présente-toi comme réceptionniste chez '
-                        'I-Interim, puis invite-la clairement à te parler (par exemple : '
-                        '"Bonjour, je suis réceptionniste chez I-Interim, n\'hésitez pas '
-                        'à me parler" puis demande-lui si elle a rendez-vous aujourd\'hui, '
-                        'ou en quoi tu peux l\'aider).'
+                        'inconnue devant toi. Dis-lui bonjour chaleureusement, puis '
+                        'demande-lui pour quel poste elle vient.'
                     )
                 else:
                     _unknown_instr = (

@@ -40,11 +40,29 @@ except Exception:                     # health dégradé si psutil absent
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(_BASE_DIR, "tablet_server", "analytics_events.jsonl")
 
-# Archive CIBLÉE (texte intégral, contrairement à LOG_PATH qui reste anonymisé) :
-# uniquement les conversations qui ont mal tourné (note ≤ 2★) ou déclenché un
-# appel d'assistance — pour relire des cas concrets et corriger prompt/tools,
-# sans enregistrer chaque visite en clair. Gitignoré (données locales).
-TRANSCRIPTS_PATH = os.path.join(_BASE_DIR, "tablet_server", "transcripts_archive.jsonl")
+# Archive en texte intégral (contrairement à LOG_PATH qui reste anonymisé) :
+# CHAQUE session est archivée ici à sa fin ("session_end", déclenché par
+# /reset dans tablet_server/server.py), plus les cas note ≤ 2★ ou appel
+# d'assistance ("low_rating"/"assistance_call") — décision produit du
+# 2026-09-24 : constituer un corpus de conversations réelles pour évaluer et
+# fine-tuner le pipeline local (voir changements/2026-09-23-pipeline-local-
+# pourquoi.md). Contient potentiellement des données personnelles (nom donné
+# pour un RDV, numéro de badge, motif d'assistance médical...) — gitignoré,
+# jamais poussé sur un dépôt distant. Politique de rétention à définir avant
+# mise en production réelle (pas encore fait à ce stade). Voir
+# conversation_data/README.md pour la démarche complète et l'anonymisation.
+_CONVERSATION_DATA_DIR = os.path.join(_BASE_DIR, "conversation_data")
+os.makedirs(_CONVERSATION_DATA_DIR, exist_ok=True)
+TRANSCRIPTS_PATH = os.path.join(_CONVERSATION_DATA_DIR, "transcripts_archive.jsonl")
+
+# Dataset par TOUR (pas par session) : un enregistrement par échange complet
+# (question, tool_calls réels, réponse) — écrit à CHAQUE tour, pas seulement
+# en fin de session comme TRANSCRIPTS_PATH. Objectif : constituer un corpus
+# exploitable pour évaluer/fine-tuner le pipeline local (voir conversation_
+# data/README.md et changements/2026-09-23-pipeline-local-pourquoi.md).
+# Mêmes précautions que TRANSCRIPTS_PATH : texte brut, gitignoré (conversation_
+# data/*.jsonl), jamais poussé sur un dépôt distant.
+TURNS_PATH = os.path.join(_CONVERSATION_DATA_DIR, "turns_dataset.jsonl")
 
 # ── Catégorisation (zone/sujet) ─────────────────────────────────────────────
 _TOOL_ZONE = {
@@ -231,6 +249,8 @@ class AnalyticsLogger:
             path, payload = self.path, evt
             if isinstance(evt, tuple) and evt[0] == "transcript":
                 path, payload = TRANSCRIPTS_PATH, evt[1]
+            elif isinstance(evt, tuple) and evt[0] == "turn":
+                path, payload = TURNS_PATH, evt[1]
             try:
                 with open(path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -303,12 +323,36 @@ class AnalyticsLogger:
             "duration_s": round(duration_s, 1) if duration_s is not None else None,
         })
 
+    def log_turn(self, mode, user_text, assistant_text, tool_calls=None,
+                 lang="fr", latency_ms=None, is_fallback=False):
+        """Archive un tour complet (question + tool_calls réels + réponse),
+        texte BRUT — pour constituer le dataset d'évaluation/fine-tuning du
+        pipeline local (voir conversation_data/README.md). `tool_calls` :
+        liste de {"name", "args", "status"}, déjà accumulée côté appelant
+        (agent/events.py) sur la durée du tour. Mêmes précautions que
+        `log_transcript` : gitignoré, jamais poussé, peut contenir du PII."""
+        if not user_text or not assistant_text:
+            return
+        evt = {
+            "ts": _now(), "session_id": self._session(), "mode": mode,
+            "user_text": user_text, "assistant_text": assistant_text,
+            "tool_calls": tool_calls or [],
+            "lang": lang or "fr",
+            "latency_ms": int(latency_ms) if latency_ms is not None else None,
+            "is_fallback": bool(is_fallback),
+        }
+        try:
+            self._q.put_nowait(("turn", evt))
+        except Exception:
+            pass
+
     def log_transcript(self, reason, turns, meta=None):
-        """Archive le texte intégral d'une conversation qui a mal tourné (note
-        basse, ou appel d'assistance déclenché). `turns` : liste de
-        {"role": "user"|"assistant", "text": ...} — déjà en mémoire côté
-        tablet_server (_chat_history), aucune capture supplémentaire ajoutée.
-        Écrit dans TRANSCRIPTS_PATH, séparé du fichier anonyme LOG_PATH."""
+        """Archive le texte intégral d'une conversation. `reason` :
+        "session_end" (toute session, sur /reset), "low_rating" (note ≤ 2★),
+        ou "assistance_call". `turns` : liste de {"role": "user"|"assistant",
+        "text": ...} — déjà en mémoire côté tablet_server (_chat_history),
+        aucune capture supplémentaire ajoutée. Écrit dans TRANSCRIPTS_PATH,
+        séparé du fichier anonyme LOG_PATH."""
         if not turns:
             return
         evt = {
@@ -346,6 +390,7 @@ log_tool = logger.log_tool
 log_rating = logger.log_rating
 log_call = logger.log_call
 log_transcript = logger.log_transcript
+log_turn = logger.log_turn
 log_alert = logger.log_alert
 note_api_error = logger.note_api_error
 
