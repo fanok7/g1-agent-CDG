@@ -31,3 +31,13 @@ graphify-out/
 
 # Captures caméra ponctuelles (scripts/cam_snapshot.sh)
 cam_snapshot*.jpg
+
+# Médias lourds du dossier de réparation : vidéos/photos de constat et manuel
+# constructeur. Utiles sur le robot, mais ~6 Mo de binaires non régénérables et
+# sans valeur pour le code — gardés sur disque, hors dépôt.
+donnees_reparation/media/
+donnees_reparation/*.pdf
+!donnees_reparation/DIAGNOSTIC_*.pdf
+
+# Extraction ponctuelle du flux caméra (vue_camera.jpg)
+vue_camera.jpg
