@@ -10,8 +10,18 @@ Seul le LLM est distant, l'audio du micro part en streaming vers l'**API OpenAI 
 │  • écoute l'audio micro     │ audio + │  • capture micro / joue le HP         │
 │  • décide les tool calls    │ events  │  • exécute les tools                  │
 │  • génère l'audio réponse   │         │  • supervise vision + librespot       │
-└─────────────────────────────┘         └───────────────────────────────────────┘
-``` 
+└─────────────────────────────┘         └──────────────▲────────────────────────┘
+                                                       │ HTTP (push frames + JSON)
+                                        ┌──────────────┴────────────────────────┐
+                                        │ Jetson Thor — caméra UGREEN           │
+                                        │  • InsightFace (visages) + YOLO (GPU) │
+                                        └───────────────────────────────────────┘
+```
+
+> **La vision ne tourne plus sur l'Orin NX.** InsightFace et YOLO sont déportés sur une
+> **Jetson Thor** qui porte la caméra ; l'Orin ne fait plus que recevoir les frames et les
+> détections. Voir **[THOR.md](THOR.md)**.
+
 ## Vidéo de démonstration 1
 [![Demo G1 Agent à l'aéroport](https://img.youtube.com/vi/fDE_c2kgEHU/maxresdefault.jpg)](https://www.youtube.com/watch?v=fDE_c2kgEHU)
 
@@ -30,6 +40,20 @@ Seul le LLM est distant, l'audio du micro part en streaming vers l'**API OpenAI 
 - **[ASSISTANCE.md](ASSISTANCE.md)** — appel d'assistance humaine (bouton 🆘 + vocal,
   salon Daily, alerte n8n/ntfy, sourdine de l'IA, audio par le robot). Contient la
   procédure de **changement de compte Daily**.
+- **[THOR.md](THOR.md)** — vision déportée sur la Jetson Thor : services systemd,
+  endpoints de push, diagnostic. **À lire avant toute intervention sur la vision.**
+- **[INFRASTRUCTURE.md](INFRASTRUCTURE.md)** — réseau, machines, services.
+- **[IINTERIM.md](IINTERIM.md)** — le métier côté agence d'intérim.
+
+Deux dossiers ne contiennent **pas** de doc vivante :
+
+- **[archives/](archives/)** — contexte passé (passations Thor/SONIC, démos, incidents),
+  non tenu à jour.
+- **[changements/](changements/)** — journal daté des décisions techniques (pourquoi un
+  pipeline local, migration vLLM…).
+- **[donnees_reparation/](donnees_reparation/)** — diagnostics matériels (aucun code). Les
+  médias lourds (vidéo de constat, manuel constructeur) sont sur le disque du robot mais
+  **hors dépôt**.
 
 ## Dashboard de télémétrie — démarrage rapide
 
@@ -83,6 +107,44 @@ C'est la source qu'utilise le dashboard lui-même. Une ligne JSON par événemen
 
 ---
 
+## État du matériel aujourd'hui
+
+Le robot n'est pas dans sa configuration nominale. Ces écarts expliquent la plupart des
+messages d'erreur au démarrage — **ils sont attendus, il n'y a rien à corriger** :
+
+| Matériel | État | Conséquence |
+|---|---|---|
+| Micro **Anker PowerConf** | branché, en service | Remplace le Cubilux cité dans d'anciennes docs |
+| Caméra **UGREEN 2K** | sur la **Thor** | Seule caméra active (visages + objets) |
+| Caméra **RealSense D435I** | restée sur l'Orin, **push désactivé** | `/tmp/latest_realsense.jpg` n'est plus écrit → **`scanner_billet` est sans source** |
+| **Mains Inspire** RH56E2 | **démontées** | `Connection to (192.168.123.21x, 6000) failed: timed out` au démarrage — sans gravité. Gestes de doigts (RPS, `hand_idle`) inopérants |
+| Détection **chute / feu** | code complet mais **commenté** dans `main.py` | Aucune alerte ne partira tant que les 4 lignes ne sont pas décommentées |
+
+## Voir ce que le robot voit
+
+Le flux MJPEG annoté (objets YOLO **et** visages sur la même image) est servi par
+`vision_server.py` sur le **port 8080** :
+
+```bash
+http://192.168.0.128:8080/          # page avec l'image intégrée  ← le plus confortable
+http://192.168.0.128:8080/stream    # le flux brut
+http://192.168.0.128:8080/detections # les détections en JSON
+```
+
+> **Prendre l'adresse `wlan0` (`192.168.0.128`), pas `192.168.123.164`** : cette dernière
+> est sur le réseau interne du robot, injoignable depuis un poste de travail. Si le routage
+> ne passe pas, utiliser le transfert de port VSCode (panneau **PORTS** → `8080`) ou
+> `ssh -N -L 8080:localhost:8080 unitree@192.168.0.128`, puis ouvrir `localhost:8080`.
+>
+> L'onglet du navigateur **tourne indéfiniment** sur `/stream` : c'est normal, un flux MJPEG
+> est une réponse HTTP qui ne se termine jamais. Ouvrir la racine `/` évite ce symptôme.
+
+Le flux est **plafonné à `STREAM_FPS = 12`** (`vision_server.py`). Sans ce plafond la boucle
+réencodait ~95 images/s (~53 Mbit/s) de doublons — la caméra n'en produit qu'~24/s. C'est un
+flux de supervision : les boîtes peuvent avoir ~2 s de retard (cadence YOLO).
+
+Pour une image fixe, sans navigateur : `python3 scripts/cam_snapshot.py`.
+
 ## Installation
 
 L'agent s'appuie sur **deux interpréteurs Python séparés** sur le Jetson, chacun avec ses dépendances — ils ne sont pas interchangeables :
@@ -104,7 +166,7 @@ Couvre le cœur (audio, WebSocket, tools) **et** la vision embarquée (`ultralyt
 
 ### 2. Reconnaissance faciale (miniconda)
 
-InsightFace tourne dans l'environnement miniconda. Les modèles (`buffalo_sc`) se téléchargent au premier lancement. Vérifier que l'import passe :
+InsightFace tourne dans l'environnement miniconda. Les modèles (`buffalo_m`) se téléchargent au premier lancement. Vérifier que l'import passe :
 
 ```bash
 /home/unitree/miniconda3/bin/python3 -c "import insightface; print('OK')"
@@ -170,6 +232,7 @@ lancement**, via `--mode` :
 |------|------|-------|
 | **I-Interim** | `--mode iinterim` | Accueil agence intérim — agenda (RDV déjà pris), prise de RDV en self-service (QR Google Calendar), formations/badges CORSUR, Gmail, transport IDF |
 | **CDG** | `--mode cdg` | Accueil Terminal 2F CDG — vols temps réel, Google Maps, transport IDF |
+| **Daneel** | `--mode daneel` | Interprète français⇄chinois — traduit au lieu de répondre. Change aussi le **modèle** (`gpt-realtime-2.1-mini`), n'expose que 3 tools, et ne lance ni vision ni face_id |
 
 Sans `--mode`, `main.py` retombe sur `_DEFAULT_MODE` codé en bas de `config.py`
 (aujourd'hui `"cdg"`) — modifiable directement si tu préfères ne jamais avoir à passer le
