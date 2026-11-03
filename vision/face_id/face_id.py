@@ -3,10 +3,11 @@
 face_id.py — Reconnaissance faciale (subprocess, GPU Jetson)
 =============================================================
 ⚠️ Tourne sur la Jetson THOR (192.168.123.166), PAS sur l'Orin NX : la caméra
-UGREEN a été déplacée là-bas en même temps que la RealSense, et la Thor a un
-vrai GPU CUDA fonctionnel pour InsightFace (onnxruntime-gpu compilé depuis les
-sources, cf. build sur la Thor — le wheel PyPI générique ne supporte pas son
-architecture). Lancé à la main sur la Thor (pas supervisé par main.py).
+de reconnaissance faciale (HBVCAM, voir CAMERA_IDS) a été déplacée là-bas en
+même temps que la RealSense, et la Thor a un vrai GPU CUDA fonctionnel pour
+InsightFace (onnxruntime-gpu compilé depuis les sources, cf. build sur la
+Thor — le wheel PyPI générique ne supporte pas son architecture). Lancé à la
+main sur la Thor (pas supervisé par main.py).
 
 Au lieu d'écrire /tmp/face_id_state.json et /tmp/latest_ugreen.jpg localement
 (ce qui ne servirait à rien, rien ne les lit sur la Thor), ce script POST
@@ -40,9 +41,15 @@ except ImportError:
     _HAS_REQUESTS = False
 
 TARGET = os.environ.get("FACE_ID_TARGET", "http://192.168.123.164:8080")
-PUSH_STATE_URL = TARGET.rstrip('/') + '/push_face_state'
+# Visages et objets YOLO viennent de la MÊME caméra UGREEN mais de deux boucles
+# à des cadences différentes (visages : en continu avec detection_loop ;
+# objets : toutes les YOLO_INTERVAL=2s dans _yolo_loop) — fusionnées sur UN
+# seul endpoint côté Orin NX (/push_ugreen_state, body {"faces": [...]} ou
+# {"objects": [...]}) plutôt que deux routes qui ne faisaient que dupliquer la
+# logique d'écriture. Chaque boucle continue de poster à son propre rythme :
+# fusionner l'URL ne fusionne pas la cadence, il n'y a qu'un payload par envoi.
+PUSH_STATE_URL = TARGET.rstrip('/') + '/push_ugreen_state'
 PUSH_FRAME_URL = TARGET.rstrip('/') + '/push_ugreen_frame'
-PUSH_YOLO_URL  = TARGET.rstrip('/') + '/push_yolo_ugreen'
 
 # Doit matcher G1_ADMIN_TOKEN dans le .env de l'Orin NX (vision_server.py) —
 # sinon vision_server.py refuse le push avec 401. Vide = comportement historique
@@ -89,6 +96,14 @@ from insightface.app import FaceAnalysis
 PHOTOS_DIR    = os.path.join(os.path.dirname(__file__), "photos")
 # Identifiants cherchés dans le nom v4l2 ET les attributs USB (fabricant/produit/série).
 # Le nom v4l2 seul ne suffit pas : la HBVCAM s'annonce "USB Camera: USB Camera" (générique).
+# ⚠️ C'est la HBVCAM (HB202400001) qui est la caméra de reconnaissance faciale sur
+# la Thor, PAS l'UGREEN — l'UGREEN reste dans la liste comme identifiant de repli pour
+# d'autres unités/câblages, mais ne doit jamais être choisie en priorité devant la
+# HBVCAM. L'ORDRE de ce tuple fait foi : find_camera_by_name() cherche chaque
+# identifiant dans l'ordre et prend le premier qui matche un nœud de capture,
+# plutôt que de prendre le plus petit /dev/videoN toutes correspondances confondues
+# (ancien bug : une UGREEN branchée sur un index plus bas que la HBVCAM volait la
+# sélection alors que la HBVCAM est la bonne caméra).
 CAMERA_IDS    = ("UGREEN", "HBVCAM", "HB202400001")
 CAMERA_NAME   = CAMERA_IDS[0]   # conservé pour les logs
 DEVICE_ID     = 0         # fallback ultime si aucun nœud de capture trouvé
@@ -97,14 +112,32 @@ SKIP          = 1       # traiter 1 frame sur SKIP
 THRESHOLD     = 0.4
 PAUSE_FILE    = ipc.VISION_PAUSE_FLAG  # créé par le jeu RPS → libérer /dev/video0
 
+# Hauteur mini de bbox (pixels, sur HEIGHT=960) pour qu'un visage soit retenu —
+# en dessous, on considère la personne "trop loin" et on l'ignore complètement
+# (pas ajoutée à `found`, donc absente de face_id_state.json). Comme
+# identifier_personne, ce_que_je_vois, face_greeting_loop (salutation
+# proactive) ET _someone_present (coupure micro, agent/events.py) lisent tous
+# ce même fichier, ce seul filtre suffit à faire ignorer les passants
+# lointains partout en même temps — y compris pour la coupure du micro, qui ne
+# doit pas s'ouvrir pour quelqu'un trop loin pour être une vraie interaction.
+# À calibrer sur site : se placer à la distance au-delà de laquelle le robot
+# ne doit plus réagir, relever la hauteur de bbox dans les logs (voir
+# detection_loop) à cette distance, et ajuster.
+MIN_FACE_HEIGHT_PX = 200
+
 # ── InsightFace (GPU si disponible, sinon CPU) ────────────────────────────────
 import onnxruntime as _ort
 _avail = _ort.get_available_providers()
 _providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if 'CUDAExecutionProvider' in _avail \
              else ['CPUExecutionProvider']
 print(f"[face_id] Chargement InsightFace ({_providers[0]})...", flush=True)
+# Taille d'entrée du détecteur : calée sur la résolution caméra pour le flux
+# live, avec un repli plus petit pour les photos de référence (voir load_photos).
+DET_SIZE          = (1280, 960)
+FALLBACK_DET_SIZE = (640, 480)
+
 face_app = FaceAnalysis(name="buffalo_m", providers=_providers)
-face_app.prepare(ctx_id=0, det_size=(1280, 960))
+face_app.prepare(ctx_id=0, det_size=DET_SIZE)
 print("[face_id] InsightFace prêt", flush=True)
 
 # ── YOLO (déporté ici pour réutiliser la même frame + le même GPU qu'InsightFace,
@@ -160,6 +193,21 @@ def load_photos(photos_dir: str) -> None:
         if img is None:
             continue
         faces = face_app.get(img)
+        if not faces:
+            # Repli sur un det_size plus petit. DET_SIZE est calé sur la caméra
+            # (1280x960) pour attraper les visages lointains dans le flux live,
+            # mais le détecteur agrandit l'image d'entrée pour la remplir : sur
+            # une photo de référence de 200x200, le visage finit plus gros que
+            # ce que les ancres SCRFD couvrent, et il n'est plus vu du tout.
+            # Mesuré sur les photos du robot : 10/10 à (640, 480) contre 7/10 à
+            # (1280, 960) — Samy, mourad et sebastien asselin disparaissaient.
+            # Enrôlement uniquement : on remet DET_SIZE avant la boucle caméra.
+            face_app.prepare(ctx_id=0, det_size=FALLBACK_DET_SIZE)
+            faces = face_app.get(img)
+            face_app.prepare(ctx_id=0, det_size=DET_SIZE)
+            if faces:
+                print(f"[face_id] {fname} : visage trouvé au 2e essai "
+                      f"(det_size {FALLBACK_DET_SIZE})", flush=True)
         if not faces:
             print(f"[face_id] Aucun visage dans {fname}", flush=True)
             continue
@@ -226,27 +274,38 @@ def find_camera_by_name(name_substrs=CAMERA_IDS, fallback: int = DEVICE_ID) -> i
     """Retourne l'index du nœud de capture dont le nom v4l2 OU les attributs USB
     contiennent un des name_substrs. À défaut, premier nœud de capture disponible.
     Pas de test d'ouverture ici : ouvrir video6 avant video7 corrompt l'USB sur
-    Jetson Tegra et empêche video7 de s'ouvrir. open_camera() gère les retries."""
+    Jetson Tegra et empêche video7 de s'ouvrir. open_camera() gère les retries.
+
+    L'ORDRE de name_substrs est une priorité, pas un simple filtre : on cherche
+    d'abord tous les nœuds qui matchent le premier identifiant, et on ne passe
+    au suivant que si aucun n'a été trouvé. Sans ça, deux caméras reconnues par
+    des identifiants différents mais toutes deux présentes sur le bus se
+    disputeraient la sélection au profit du plus petit /dev/videoN — qui n'est
+    pas forcément la bonne caméra (cf. HBVCAM vs UGREEN, toutes deux dans
+    CAMERA_IDS pour des raisons différentes)."""
     if isinstance(name_substrs, str):
         name_substrs = (name_substrs,)
     wanted = [s.lower() for s in name_substrs]
 
-    capture_nodes, matches = [], []
+    capture_nodes = []
+    haystacks = {}
     for path in sorted(glob.glob("/sys/class/video4linux/video*"),
                        key=lambda p: int(os.path.basename(p).replace("video", ""))):
         idx = int(os.path.basename(path).replace("video", ""))
         if not _is_capture_node(idx):
             continue
         capture_nodes.append(idx)
-        haystack = (_video_name(idx) + " " + _usb_ident(idx)).lower()
-        if any(s in haystack for s in wanted):
-            matches.append(idx)
+        haystacks[idx] = (_video_name(idx) + " " + _usb_ident(idx)).lower()
 
-    if matches:
-        best = matches[0]
-        print(f"[face_id] Caméra reconnue → /dev/video{best} "
-              f"({_video_name(best)} | {_usb_ident(best)}) — candidats {matches}", flush=True)
-        return best
+    for substr in wanted:
+        matches = [idx for idx in capture_nodes if substr in haystacks[idx]]
+        if matches:
+            best = matches[0]
+            print(f"[face_id] Caméra reconnue → /dev/video{best} "
+                  f"({_video_name(best)} | {_usb_ident(best)}) "
+                  f"— identifiant '{substr}', candidats {matches}", flush=True)
+            return best
+
     if capture_nodes:
         best = capture_nodes[0]
         print(f"[face_id] Aucun identifiant {list(name_substrs)} trouvé — "
@@ -374,7 +433,7 @@ def _yolo_loop() -> None:
                     "y":     int((oy1 + oy2) / 2),
                     "cam":   "ugreen",
                 })
-            _push_json(PUSH_YOLO_URL, dets)
+            _push_json(PUSH_STATE_URL, {"objects": dets})
         except Exception as e:
             print(f"[face_id] YOLO erreur : {e}", flush=True)
 
@@ -406,6 +465,11 @@ def detection_loop() -> None:
 
         for face in faces:
             x1, y1, x2, y2 = [int(v) for v in face.bbox]
+            if (y2 - y1) < MIN_FACE_HEIGHT_PX:
+                # Trop loin : ignoré partout (voir commentaire MIN_FACE_HEIGHT_PX).
+                print(f"[face_id] Visage ignoré (trop loin, hauteur bbox={y2 - y1}px)",
+                      flush=True)
+                continue
             name, score = identify(face.normed_embedding)
             entry = {"name": name, "score": round(score, 3), "bbox": [x1, y1, x2, y2]}
             if name == "Inconnu":

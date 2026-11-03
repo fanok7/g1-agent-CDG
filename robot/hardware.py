@@ -1,3 +1,4 @@
+import os
 import sys
 sys.path.insert(0, '/home/unitree/unitree_sdk2_python')
 
@@ -12,7 +13,8 @@ _arm_client   = None
 
 def init():
     global _audio_client, _arm_client
-    print(f'[HARDWARE] Init réseau {ROBOT_INTERFACE}...')
+    if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+        print(f'[HARDWARE] Init réseau {ROBOT_INTERFACE}...')
     ChannelFactoryInitialize(ROBOT_NETWORK_ID, ROBOT_INTERFACE)
 
     _audio_client = AudioClient()
@@ -24,7 +26,8 @@ def init():
     _arm_client.SetTimeout(10.0)
     _arm_client.Init()
 
-    print('[HARDWARE] OK')
+    if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+        print('[HARDWARE] OK')
 
 
 def get_audio_client():

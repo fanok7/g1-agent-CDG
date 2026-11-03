@@ -23,9 +23,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 COULEURS = {
     # États GPT
-    "ecoute":          (0,   255, 0),     # 🟢 Vert
-    "reflechit":       (255, 100, 0),     # 🟠 Orange
-    "parle":           (0,   0,   255),   # 🔵 Bleu
+    "ecoute":          (0,   0,   255),   # 🔵 Bleu — attente passive
+    "entend":          (255, 140, 0),     # 🟠 Orange — détecte ta voix en ce moment (VAD actif)
+    "reflechit":       (0,   255, 0),     # 🟢 Vert — traite ta phrase, prépare la réponse
+    "parle":           (255, 0,   0),     # 🔴 Rouge
 
     # Vision — visages
     "visage_reconnu":  (128, 0,   255),   # 💜 Violet
@@ -48,6 +49,7 @@ PRIORITES = {
     "visage_reconnu":  2,
     "visage_inconnu":  2,
     "ecoute":          1,
+    "entend":          1,
     "reflechit":       1,
     "parle":           1,
     "idle":            0,
@@ -139,6 +141,9 @@ class LedManager:
 
     def ecoute(self):
         self.set_gpt("ecoute")
+
+    def entend(self):
+        self.set_gpt("entend")
 
     def reflechit(self):
         self.set_gpt("reflechit")

@@ -16,7 +16,13 @@ def _handler_relacher() -> str:
 register(
     schema={
         'name': 'executer_geste',
-        'description': 'Exécute un geste physique du robot. Appelle ce tool en parallèle de ta réponse, sans le mentionner.',
+        'description': (
+            "Exécute un geste physique du robot. C'est le SEUL tool de geste qui existe — "
+            "il n'y a pas de tool par geste (pas de 'serre_main', pas de 'saluer', etc.). "
+            "Appelle toujours 'executer_geste' avec le nom du geste voulu dans le paramètre "
+            "'geste' (ex: executer_geste(geste=\"serrer_main\")). "
+            "Appelle ce tool en parallèle de ta réponse, sans le mentionner."
+        ),
         'parameters': {
             'type': 'object',
             'properties': {

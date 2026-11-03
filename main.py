@@ -12,6 +12,18 @@ sys.path.insert(0, '/home/unitree/g1_agent_interim')
 import argparse
 import os
 
+# Logs verbeux (démarrages de sous-processus, statuts routiniers Thor/Spotify/
+# mains...) masqués par défaut — le terminal ne garde que la conversation
+# ([Toi]/[G1]), les tools appelés ([TOOL]), les gestes ([GESTE]) et les vraies
+# erreurs. Pour tout réafficher (debug) : G1_VERBOSE_LOGS=1. Même contrat que
+# agent/events.py::_vprint (dupliqué ici, pas de module utils partagé).
+_VERBOSE_LOGS = os.environ.get('G1_VERBOSE_LOGS', '0') == '1'
+
+
+def _vprint(*args, **kwargs):
+    if _VERBOSE_LOGS:
+        print(*args, **kwargs)
+
 # Doit s'exécuter AVANT le premier `import config` (direct ou transitif via un
 # tool) : config.py lit ROBOT_MODE au moment de son import pour choisir
 # SYSTEM_PROMPT. `parse_known_args` ignore les flags qu'on ne connaît pas
@@ -31,6 +43,13 @@ _parser.add_argument(
     "--no-translate", dest="translate", action="store_false",
     help="Désactive la traduction interprète (persona daneel conversationnel normal).",
 )
+_parser.add_argument(
+    "--engine", choices=["openai", "local"], default="openai",
+    help="Moteur conversationnel : 'openai' (API Realtime, défaut, comportement "
+         "actuel inchangé) ou 'local' (squelette Ollama+ASR+TTS local — voir "
+         "agent_local/, portée réduite : gestes + heure + arbre de décision "
+         "visiteur seulement).",
+)
 _parser.set_defaults(translate=None)
 _args, _ = _parser.parse_known_args()
 if _args.mode:
@@ -42,6 +61,25 @@ elif _args.translate is False:
 elif _args.mode == "daneel":
     # Par défaut, le mode daneel est interprète ; --no-translate le désactive.
     os.environ.setdefault("ROBOT_TRANSLATE", "1")
+
+if _args.engine == "local" and "G1_LOCAL_LD_PRELOAD_DONE" not in os.environ:
+    # ctranslate2 (faster-whisper, agent_local/asr.py) embarque sa propre copie
+    # de libgomp et la charge tardivement via dlopen — sur cette Jetson
+    # (aarch64/glibc), ça peut lever `cannot allocate memory in static TLS
+    # block` selon ce qui a déjà été chargé avant (dépend de l'environnement du
+    # shell, pas reproduit systématiquement). Fix standard : précharger une
+    # libgomp dès le lancement du process (LD_PRELOAD doit être positionné
+    # AVANT le démarrage de l'interpréteur, d'où le re-exec de soi-même) pour
+    # qu'elle soit comptée dans le budget TLS statique initial. Limité à
+    # --engine local : n'affecte jamais le chemin openai/cdg en service.
+    _gomp = ('/home/unitree/.local/lib/python3.8/site-packages/'
+             'ctranslate2.libs/libgomp-d22c30c5.so.1.0.0')
+    if not os.path.isfile(_gomp):
+        _gomp = '/usr/lib/aarch64-linux-gnu/libgomp.so.1'
+    os.environ["LD_PRELOAD"] = _gomp + (
+        ':' + os.environ["LD_PRELOAD"] if os.environ.get("LD_PRELOAD") else '')
+    os.environ["G1_LOCAL_LD_PRELOAD_DONE"] = "1"
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 import config
 import ipc
@@ -69,7 +107,7 @@ else:
     import tools.web_search        # noqa: F401
     import tools.database          # noqa: F401
     import tools.gesture_tool      # noqa: F401
-    import tools.gmail             # noqa: F401
+    #import tools.gmail             # noqa: F401 — désactivé, plus de capacité email
     import tools.airlabs_tools     # noqa: F401
     import tools.transport_tools   # noqa: F401
     import tools.googlemaps_tools  # noqa: F401
@@ -85,6 +123,7 @@ else:
     import tools.tablet_tools      # noqa: F401 — proposer_choix / afficher_texte_ecran / afficher_qr_ecran / afficher_plan_ecran
     import tools.assistance_tool   # noqa: F401 — appeler_assistance (alerte n8n + salon Jitsi + sourdine IA)
     import tools.body_state_tool   # noqa: F401 — etat_de_mon_corps (proprioception : rt/lowstate)
+    import tools.visitor_notify_tool  # noqa: F401 — signaler_visiteur (SMS à Samy)
 from tools.screenshot_tool import SCREENSHOT_DIR
 from agent.text_input import input_queue as _text_input_queue
 
@@ -161,7 +200,7 @@ def _open_tablet_display():
             return
         except FileNotFoundError:
             continue
-    print("[TABLETTE] Aucun navigateur trouvé (chromium-browser/chromium/google-chrome) "
+    _vprint("[TABLETTE] Aucun navigateur trouvé (chromium-browser/chromium/google-chrome) "
           "— ouvre le lien manuellement.")
 
 
@@ -198,7 +237,7 @@ def _start_subprocess(script: str, tag: str, python: str = MINICONDA_PYTHON,
         stderr=subprocess.STDOUT,
     )
     _child_procs.append(proc)
-    print(f"[G1] {tag} démarré (PID {proc.pid})")
+    _vprint(f"[G1] {tag} démarré (PID {proc.pid})")
     return proc
 
 
@@ -221,7 +260,7 @@ async def _pipe_logs(proc: subprocess.Popen) -> None:
         line = await loop.run_in_executor(None, proc.stdout.readline)
         if not line:
             break
-        print(line.decode(errors="replace").rstrip())
+        _vprint(line.decode(errors="replace").rstrip())
 
 
 async def _supervise(script: str, tag: str, python: str, args=None) -> None:
@@ -348,10 +387,10 @@ async def run():
         asyncio.ensure_future(_gesture_cmd_loop()),
     ]
 
-    print('=' * 60)
-    print(f'[TABLETTE] Ouvre ce lien pour voir l\'écran : http://{_lan_ip()}:{TABLET_PORT}')
-    print('=' * 60)
-    print('[G1] Prêt. Parle pour commencer, ou tape ton message + Entrée (Ctrl+C pour quitter)')
+    _vprint('=' * 60)
+    _vprint(f'[TABLETTE] Ouvre ce lien pour voir l\'écran : http://{_lan_ip()}:{TABLET_PORT}')
+    _vprint('=' * 60)
+    _vprint('[G1] Prêt. Parle pour commencer, ou tape ton message + Entrée (Ctrl+C pour quitter)')
 
     # ── Boucle de RECONNEXION de l'agent ─────────────────────────────────────
     # Si la WebSocket OpenAI tombe (coupure réseau, timeout keepalive, fermeture
@@ -364,12 +403,12 @@ async def run():
             ws = None
             try:
                 ws = await connect()
-                print('[G1] Connecté à OpenAI — agent actif.')
+                _vprint('[G1] Connecté à OpenAI — agent actif.')
                 backoff = 2   # remise à zéro après une connexion réussie
                 global _daneel_intro_done
                 if config.ROBOT_MODE == "daneel" and config.TRANSLATE_MODE and not _daneel_intro_done:
                     _daneel_intro_done = True
-                    print('[G1] Daneel se présente (fr puis zh)...')
+                    _vprint('[G1] Daneel se présente (fr puis zh)...')
                     await _daneel_intro(ws)
                 await asyncio.gather(
                     send_audio_loop(ws),
@@ -412,7 +451,14 @@ async def run():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(run())
+        if _args.engine == "local":
+            # Squelette pipeline local (ASR -> Ollama -> validation -> TTS) —
+            # portée minimale, ne démarre ni tablette ni vision ni Spotify.
+            # Voir agent_local/orchestrator.py.
+            from agent_local.orchestrator import run_local
+            asyncio.run(run_local())
+        else:
+            asyncio.run(run())
     except KeyboardInterrupt:
         print('\n[G1] Au revoir !')
     finally:

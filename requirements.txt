@@ -27,3 +27,20 @@ pyserial
 
 # ── Supabase (commenté — database.py non actif) ────────
 # supabase
+
+# ── Pipeline local (--engine local, squelette — voir agent_local/) ─────
+# faster-whisper (CTranslate2) et torch (Silero VAD) : vérifier la
+# disponibilité de wheels aarch64 pour Python 3.8 sur ce Jetson avant
+# installation — pas de garantie équivalente aux paquets ci-dessus.
+faster-whisper
+# tokenizers >=0.19 n'a pas de wheel manylinux aarch64/cp38 sur PyPI : pip le
+# reconstruit alors depuis les sources (maturin/pyo3), ce qui produit un .so
+# cassé sur ce Jetson (`undefined symbol: PyInterpreterState_Get`, un
+# symbole absent en 3.8). Épinglé à 0.15.2, dernière version avec un wheel
+# prébuilt cp38-aarch64 — installer APRÈS faster-whisper, qui sinon tire la
+# 0.21.0 par défaut.
+tokenizers==0.15.2
+torch                  # Silero VAD (torch.hub) — CPU suffit
+scipy                  # resample_poly (agent_local/asr.py) — resampling anti-repliement 48k→16k
+# Piper piloté en sous-processus (binaire `piper`, pas le paquet Python) :
+# voir agent_local/tts.py pour l'installation du binaire + des voix .onnx.

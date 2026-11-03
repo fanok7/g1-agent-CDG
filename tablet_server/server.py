@@ -71,7 +71,8 @@ AI_PAUSED_FLAG = ipc.AI_PAUSED_FLAG   # verrou : l'IA n'écoute ni ne parle tant
 # chaque démarrage (affiché en log).
 ADMIN_TOKEN = os.environ.get("G1_ADMIN_TOKEN") or secrets.token_urlsafe(16)
 if not os.environ.get("G1_ADMIN_TOKEN"):
-    print("[SERVER] G1_ADMIN_TOKEN non défini — token généré pour cette session : {}".format(ADMIN_TOKEN))
+    if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+        print("[SERVER] G1_ADMIN_TOKEN non défini — token généré pour cette session : {}".format(ADMIN_TOKEN))
 
 
 def _authorized(request: Request) -> bool:
@@ -81,6 +82,35 @@ def _authorized(request: Request) -> bool:
 
 def _unauthorized():
     return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+
+# Écran de Samy (ESP32, voir Projet/écran interactif) — domaine de confiance
+# séparé de ADMIN_TOKEN : ce token n'autorise que /api/samy-ready, rien
+# d'autre sur ce serveur.
+SAMY_SCREEN_TOKEN = os.environ.get("SAMY_SCREEN_TOKEN", "")
+
+
+def _samy_authorized(request: Request) -> bool:
+    tok = request.headers.get("x-auth-token") or request.query_params.get("token")
+    return bool(SAMY_SCREEN_TOKEN) and tok == SAMY_SCREEN_TOKEN
+
+
+# "Un visiteur attend Samy" : mis à vrai par tools/visitor_notify_tool.py
+# juste après avoir prévenu Samy (le robot vient de dire "asseyez-vous, Samy
+# va venir vous chercher"), effacé au prochain /reset (visiteur reparti) ou
+# une fois l'annonce faite. Permet à /api/samy-ready de savoir s'il y a
+# vraiment quelqu'un à qui parler quand Samy appuie sur "Candidat Suivant".
+_visitor_waiting = False
+
+
+def mark_visitor_waiting():
+    global _visitor_waiting
+    _visitor_waiting = True
+
+
+def clear_visitor_waiting():
+    global _visitor_waiting
+    _visitor_waiting = False
 
 
 _current_choices = []  # type: List[str]
@@ -185,6 +215,29 @@ async def respond(request: Request):
         if _agent_input_queue is not None:
             _agent_input_queue.put(text)
     return {"ok": True}
+
+
+@app.post("/api/samy-ready")
+async def samy_ready(request: Request):
+    """Samy vient d'appuyer sur « Candidat Suivant » sur son écran. S'il y a
+    un visiteur qui attend encore (voir _visitor_waiting), annonce-le dans la
+    conversation en cours — même mécanisme que /respond (injection dans
+    agent.text_input.input_queue), mais comme une instruction système plutôt
+    qu'une réponse du visiteur, pour que le modèle l'annonce directement sans
+    y répondre comme à une question."""
+    if not _samy_authorized(request):
+        return _unauthorized()
+
+    global _visitor_waiting
+    if not _visitor_waiting:
+        return {"ok": True, "annonce": False}
+
+    _visitor_waiting = False
+    texte = "[SYSTÈME] Samy est disponible. Informe le visiteur présent qu'il peut y aller maintenant, en une phrase."
+    input_queue.put(texte)
+    if _agent_input_queue is not None:
+        _agent_input_queue.put(texte)
+    return {"ok": True, "annonce": True}
 
 
 @app.post("/call/start")
@@ -304,6 +357,13 @@ async def reset(request: Request):
     if not _authorized(request):
         return _unauthorized()
     global _current_state, _current_choices, _current_lang, _pending_confirm
+    clear_visitor_waiting()  # visiteur reparti : plus personne à qui annoncer Samy
+    if _chat_history:
+        try:
+            import analytics
+            analytics.log_transcript("session_end", list(_chat_history))
+        except Exception:
+            pass
     _current_state = {"type": "idle"}
     _current_choices = []
     _current_lang = "fr"

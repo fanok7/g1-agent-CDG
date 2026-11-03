@@ -11,8 +11,8 @@ vision/face_id/photos/
 *.onnx
 SESSION_RESUME.md
 tablet_server/analytics_events.jsonl
-tablet_server/transcripts_archive.jsonl
 tablet_server/rapport_stats.html
+conversation_data/*.jsonl
 
 # Fichiers générés au runtime (plans, QR codes, notes, stats, backups)
 tablet_server/static/plans/
@@ -21,3 +21,13 @@ tablet_server/static/notes/
 backups/
 *.bak
 *.log
+
+# Sauvegardes horodatées de fichiers source (voir archives/code_bak/)
+*.bak.*
+archives/code_bak/
+
+# Sortie du skill graphify (graphe de connaissance régénérable)
+graphify-out/
+
+# Captures caméra ponctuelles (scripts/cam_snapshot.sh)
+cam_snapshot*.jpg

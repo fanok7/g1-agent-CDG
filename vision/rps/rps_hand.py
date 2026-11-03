@@ -105,9 +105,9 @@ class RPSHand:
 
         if self.connected:
             self.client.write_registers(REG_FORCE_SET,
-                                        [FORCE_DEFAULT]*N_DOF, slave=DEVICE_ID)
+                                        [FORCE_DEFAULT]*N_DOF, device_id=DEVICE_ID)
             self.client.write_registers(REG_SPEED_SET,
-                                        [SPEED_DEFAULT]*N_DOF, slave=DEVICE_ID)
+                                        [SPEED_DEFAULT]*N_DOF, device_id=DEVICE_ID)
             print(f"[OK] Main {self.name} connectée ({self.ip})")
         else:
             print(f"[WARN] Main {self.name} non connectée — mode simulation")
@@ -119,7 +119,7 @@ class RPSHand:
         try:
             self.client.write_registers(REG_POS_SET,
                                         [int(v) for v in positions],
-                                        slave=DEVICE_ID)
+                                        device_id=DEVICE_ID)
         except Exception as e:
             print(f"[{self.name}] Erreur Modbus : {e}")
 

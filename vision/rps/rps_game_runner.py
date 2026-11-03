@@ -109,7 +109,11 @@ def prepare():
 
     _patch_yaml()
     _hand   = RPSHand(side='r')
-    _vision = RPSVision(MODEL_PATH, source=0)
+    # La RealSense n'est plus branchée en local sur l'Orin NX (migration
+    # Thor, voir THOR.md) : source=0 ouvrait un /dev/video0 qui n'existe plus
+    # ici. La Thor pousse ses frames RealSense dans ipc.REALSENSE_FRAME, lu
+    # en mode "frame partagée" par RPSVision (voir rps_vision.py).
+    _vision = RPSVision(MODEL_PATH, source=ipc.REALSENSE_FRAME)
     threading.Thread(target=_vision.preload, daemon=True).start()
 
     print(f'[RPS] Coup secret choisi : {_robot_gesture}', flush=True)

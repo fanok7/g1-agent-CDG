@@ -26,8 +26,6 @@ Ce module ne doit rien importer : il est chargé par config.py, donc très tôt.
 
 # ── Jeux de boutons canoniques ──────────────────────────────────────────────
 
-OUI_NON = ["Oui", "Non"]
-"""Vraie question fermée appelant une décision."""
 
 TRANSPORT = ["À pied", "Voiture", "Transport", "Vélo"]
 """Mode de déplacement, demandé avant tout itinéraire."""

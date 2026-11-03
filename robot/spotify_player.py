@@ -24,6 +24,14 @@ import numpy as np
 
 import ipc
 
+_VERBOSE_LOGS = os.environ.get('G1_VERBOSE_LOGS', '0') == '1'
+
+
+def _vprint(*args, **kwargs):
+    if _VERBOSE_LOGS:
+        print(*args, **kwargs)
+
+
 _RESPONDING_FLAG = ipc.RESPONDING_FLAG
 # Appel d'assistance en cours : on coupe aussi la musique, sinon elle sortirait du
 # haut-parleur du robot et polluerait le micro de la tablette pendant l'appel.
@@ -42,10 +50,13 @@ _CREDS     = os.path.join(_CACHE_DIR, 'credentials.json')
 
 _MAX_GAIN    = 3.0           # boost max à volume 100 (comme la voix) — clippe mais plus fort
 _lock        = threading.Lock()
-_gain        = _MAX_GAIN     # gain logiciel local, aligné sur --initial-volume 100 de
-                              # librespot (le vrai volume passe par l'API) — sinon le premier
-                              # "baisse le son" remonte ce gain local et annule en partie la
-                              # baisse côté API (bug : le volume ne baisse presque pas)
+_gain        = 0.5 * _MAX_GAIN   # volume par défaut 50% avant tout appel à spotify_volume,
+                                  # cohérent avec --initial-volume 100 de librespot (le vrai
+                                  # volume passe UNIQUEMENT par ce gain local — l'API reste
+                                  # fixée à 100 en permanence, voir tools/spotify_tool.py) —
+                                  # sinon le premier "baisse le son" remonte ce gain local et
+                                  # annule en partie la baisse côté API (bug : le volume ne
+                                  # baisse presque pas)
 _proc        = None          # subprocess librespot courant
 _mgr_thread  = None
 _started     = False
@@ -93,10 +104,9 @@ def _build_cmd() -> list:
         '--bitrate', '320',
         '--backend', 'pipe',          # PCM brut sur stdout
         '--format', 'S16',            # 16-bit signé, 44100 Hz stéréo
-        '--initial-volume', '10',     # démarrage plus doux ; sitôt spotify_volume appelé,
-                                       # le volume API repasse à 100 et c'est le gain
-                                       # logiciel local (spotify_player.set_volume) qui
-                                       # pilote seul le volume réel — voir tools/spotify_tool.py
+        '--initial-volume', '100',    # l'API reste TOUJOURS à 100 — seul le gain logiciel
+                                       # local (_gain, par défaut 50%) pilote le volume réel,
+                                       # voir tools/spotify_tool.py::_volume_handler
         '--autoplay', 'on',           # radio Spotify quand la file est vide → musique continue
         '--cache', _CACHE_DIR,        # credentials persistés ici
         '--disable-audio-cache',      # ne garde que les credentials, pas l'audio
@@ -108,7 +118,7 @@ def _log_stderr(proc: subprocess.Popen) -> None:
     for raw in iter(proc.stderr.readline, b''):
         line = raw.decode(errors='replace').rstrip()
         if line:
-            print(f'[LIBRESPOT] {line}', flush=True)
+            _vprint(f'[LIBRESPOT] {line}', flush=True)
 
 
 def _manager_loop() -> None:
@@ -139,7 +149,7 @@ def _manager_loop() -> None:
             _proc = proc
 
         threading.Thread(target=_log_stderr, args=(proc,), daemon=True).start()
-        print(f'[PLAYER] librespot démarré (PID {proc.pid})', flush=True)
+        _vprint(f'[PLAYER] librespot démarré (PID {proc.pid})', flush=True)
 
         try:
             _pump_pcm(proc, get_audio_client())
@@ -147,11 +157,15 @@ def _manager_loop() -> None:
             print(f'[PLAYER] Erreur transport PCM : {e}', flush=True)
 
         rc = proc.poll()
-        print(f'[PLAYER] librespot terminé (code {rc}) — redémarrage dans 3s', flush=True)
-        try:
-            get_audio_client().PlayStop(_CHANNEL)
-        except Exception:
-            pass
+        _vprint(f'[PLAYER] librespot terminé (code {rc}) — redémarrage dans 3s', flush=True)
+        # Canal 'chat' partagé avec la voix (robot/audio.py) : ne PAS couper si le
+        # robot est en train de parler, sinon chaque crash-loop librespot (ex: 503
+        # Spotify) coupe la phrase en cours (#observé 2026-09-29).
+        if not os.path.exists(_RESPONDING_FLAG):
+            try:
+                get_audio_client().PlayStop(_CHANNEL)
+            except Exception:
+                pass
         time.sleep(3)
 
 

@@ -96,9 +96,10 @@ register(
             "Affiche des boutons tactiles sur la tablette correspondant EXACTEMENT "
             "aux options de la question fermée que tu viens de poser à l'oral — "
             "alternative tactile à une réponse vocale. Appelle TOUJOURS cet outil "
-            "juste après avoir posé une question à choix fermé (oui/non, ou un choix "
-            "parmi plusieurs options nommées), quel que soit le nombre d'options. "
-            "Exemples : question oui/non -> options=" + choices.fmt(choices.OUI_NON) + " ; question sur le "
+            "juste après avoir posé une question à choix fermé (un choix parmi plusieurs "
+            "options nommées), quel que soit le nombre d'options. Ne l'utilise JAMAIS pour "
+            "une question oui/non : celle-ci se pose à l'oral. "
+            "Exemple : question sur le "
             "mode de transport -> options=" + choices.fmt(choices.TRANSPORT) + ". Ces libellés-là doivent être "
             "repris EXACTEMENT (la tablette les traduit toute seule). Sinon : libellés "
             "courts (1-3 mots), correspondant exactement à ce que l'utilisateur "
@@ -484,20 +485,21 @@ def _afficher_qr_rdv_handler():
     return "QR de prise de rendez-vous affiché à l'écran."
 
 
-register(
-    {
-        "name": "afficher_qr_rdv_ecran",
-        "description": (
-            "Affiche à l'écran un QR code vers la page Google Calendar où le visiteur "
-            "choisit lui-même son créneau de rendez-vous (les intérimaires réservent en "
-            "self-service). Appelle ce tool quand un visiteur qui n'a PAS encore de "
-            "rendez-vous veut en prendre un. Ne mentionne jamais l'adresse du lien à "
-            "l'oral — dis seulement de scanner le QR affiché."
-        ),
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    _afficher_qr_rdv_handler,
-)
+# Désactivé le 2026-09-21 : la prise de nouveau RDV n'a plus lieu d'être sur place.
+# register(
+#     {
+#         "name": "afficher_qr_rdv_ecran",
+#         "description": (
+#             "Affiche à l'écran un QR code vers la page Google Calendar où le visiteur "
+#             "choisit lui-même son créneau de rendez-vous (les intérimaires réservent en "
+#             "self-service). Appelle ce tool quand un visiteur qui n'a PAS encore de "
+#             "rendez-vous veut en prendre un. Ne mentionne jamais l'adresse du lien à "
+#             "l'oral — dis seulement de scanner le QR affiché."
+#         ),
+#         "parameters": {"type": "object", "properties": {}, "required": []},
+#     },
+#     _afficher_qr_rdv_handler,
+# )
 
 
 # ── afficher_calendrier_rdv ────────────────────────────────────────────────────
@@ -560,28 +562,29 @@ def _afficher_calendrier_rdv_handler(date: str = "", **_kwargs) -> str:
     return f"Calendrier affiché à l'écran pour le {label} ({len(slots)} créneaux libres). Le visiteur peut aussi naviguer vers d'autres jours avec les flèches. Attends qu'il en choisisse un."
 
 
-register(
-    {
-        "name": "afficher_calendrier_rdv",
-        "description": (
-            "Affiche un calendrier tactile interactif sur la tablette avec les créneaux "
-            "RÉELLEMENT libres de l'agenda de Samy pour un jour donné — le visiteur tape "
-            "directement le créneau qu'il veut. Alternative au QR self-service "
-            "(afficher_qr_rdv_ecran) pour un visiteur qui préfère choisir sur l'écran du "
-            "robot plutôt que scanner avec son téléphone. Une fois le créneau tapé, il "
-            "t'arrive comme un message ('Je choisis le créneau ... à ...') — demande le "
-            "nom du candidat si tu ne l'as pas déjà, puis appelle creer_rdv pour finaliser."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "date": {
-                    "type": "string",
-                    "description": "Date au format YYYY-MM-DD. Omis = prochain jour ouvré.",
-                },
-            },
-            "required": [],
-        },
-    },
-    _afficher_calendrier_rdv_handler,
-)
+# Désactivé le 2026-09-21 : la prise de nouveau RDV n'a plus lieu d'être sur place.
+# register(
+#     {
+#         "name": "afficher_calendrier_rdv",
+#         "description": (
+#             "Affiche un calendrier tactile interactif sur la tablette avec les créneaux "
+#             "RÉELLEMENT libres de l'agenda de Samy pour un jour donné — le visiteur tape "
+#             "directement le créneau qu'il veut. Alternative au QR self-service "
+#             "(afficher_qr_rdv_ecran) pour un visiteur qui préfère choisir sur l'écran du "
+#             "robot plutôt que scanner avec son téléphone. Une fois le créneau tapé, il "
+#             "t'arrive comme un message ('Je choisis le créneau ... à ...') — demande le "
+#             "nom du candidat si tu ne l'as pas déjà, puis appelle creer_rdv pour finaliser."
+#         ),
+#         "parameters": {
+#             "type": "object",
+#             "properties": {
+#                 "date": {
+#                     "type": "string",
+#                     "description": "Date au format YYYY-MM-DD. Omis = prochain jour ouvré.",
+#                 },
+#             },
+#             "required": [],
+#         },
+#     },
+#     _afficher_calendrier_rdv_handler,
+# )

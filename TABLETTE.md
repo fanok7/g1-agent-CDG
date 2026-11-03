@@ -143,6 +143,7 @@ de la tablette ne perd ni la conversation ni un appel en cours.
 | `/call/start` | POST | **Seul** déclencheur réel d'un appel d'assistance (toujours après confirmation) |
 | `/call/end` | POST | Raccroche : retire `/tmp/ai_paused`, ferme le salon |
 | `/assist/cancel` | POST | Le visiteur a refusé l'appel → oublie la demande en attente |
+| `/api/rdv-slots` | GET | ⚠️ Orpheline depuis le 2026-09-21 : servait les flèches du calendrier RDV tactile (`afficher_calendrier_rdv`, désactivé — § 5) ; route toujours en place côté serveur mais plus jamais appelée par le client |
 | `/reset` | POST | Nouvelle session : vide l'historique côté serveur |
 | `/clientlog` | POST | **Journal du navigateur** → `/tmp/tablet_client.log` + console |
 | `/api/export-logs` | GET | Télécharge `analytics_events.jsonl` |
@@ -229,6 +230,13 @@ n'importe quel autre tool.
 | `afficher_qr_ecran(...)` | QR plein écran | `{type:"qr", titre, image_url}` |
 | `afficher_plan_ecran(...)` | Itinéraire : iframe Maps + image + QR | `{type:"plan", titre, image_url, qr_url, embed_url}` |
 | `definir_langue_ecran(langue)` | Bascule l'interface | *(canal `lang`)* |
+| `demander_saisie(titre, champs)` | Clavier tactile structuré (1-4 champs) | `{type:"input", titre, champs}` |
+
+⚠️ `afficher_qr_rdv_ecran` et `afficher_calendrier_rdv` ont existé (QR self-service / calendrier
+tactile pour prendre un nouveau RDV) mais sont **désactivés depuis le 2026-09-21** — la prise
+de nouveau RDV n'a plus lieu d'être sur place (§ Calendrier & RDV dans [CLAUDE.md](CLAUDE.md)).
+Leurs handlers et le type de vue `"calendar"` (JS) existent toujours mais ne sont plus
+atteignables : `register()` est commenté dans `tools/tablet_tools.py`.
 
 Les fichiers générés vivent dans `tablet_server/static/` : `qrcodes/`, `plans/`, `notes/`.
 Ils **s'accumulent sans nettoyage** — voir § Améliorations.
@@ -236,6 +244,13 @@ Ils **s'accumulent sans nettoyage** — voir § Améliorations.
 Le QR d'un texte long ne contient pas le texte mais un **lien LAN** vers une note HTML
 servie par le robot (`_save_text_retrieval_qr`) : un QR direct serait illisible. Ce lien
 n'est joignable que depuis le réseau du robot.
+
+**`demander_saisie`** — un `<input type="text">` natif par libellé demandé (clavier Android
+natif au focus, aucun clavier custom à maintenir). Au submit, les valeurs sont assemblées
+en phrase (`"Prénom : Jean. Nom : Dupont."`) et repartent par **le même chemin qu'un tap
+sur un bouton** (`POST /respond` → conversation) — le serveur ne sait rien du contenu,
+aucune logique métier ajoutée côté tablette/serveur. Utilisé quand la voix échoue sur un
+nom propre (accent, bruit), typiquement avant `chercher_rdv_personne`.
 
 ---
 
@@ -352,7 +367,7 @@ client, et casse la portabilité en démo. L'USB reste le mode de référence.
 | `tablet_server/templates/index.html` | Toute l'interface (HTML+CSS+JS) |
 | `tablet_server/static/{qrcodes,plans,notes}/` | Fichiers générés par les tools — **vidés au démarrage de `main.py`** |
 | `tablet_server/analytics_events.jsonl` | Journal télémétrie anonyme |
-| `tools/tablet_tools.py` | Les 5 tools d'écran |
+| `tools/tablet_tools.py` | Les 6 tools d'écran actifs (+ 2 désactivés : afficher_qr_rdv_ecran, afficher_calendrier_rdv) |
 | `tools/assistance_tool.py` | Appel d'assistance (voir [ASSISTANCE.md](ASSISTANCE.md)) |
 | `scripts/adb_reverse_tablet.sh` + `.service` | Persistance du tunnel USB |
 | `scripts/g1-main.service` + `installer_autostart.sh` | Mode auto-start |

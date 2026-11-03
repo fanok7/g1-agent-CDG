@@ -109,24 +109,51 @@ class RPSVision:
         model = self._model
         print(f"[INFO] Classes modèle : {model.names}")
 
-        cap = cv2.VideoCapture(
-            int(self.source) if str(self.source).isdigit() else self.source)
-        if not cap.isOpened():
-            print(f"[ERR] Impossible d'ouvrir : {self.source}")
-            return
+        # La RealSense n'est plus branchée en local sur l'Orin NX (migration
+        # Thor, voir THOR.md) : /dev/video* ou un index numérique restent
+        # supportés pour les tests standalone sur PC, mais en production
+        # `source` est le chemin de la frame RealSense poussée par la Thor
+        # (ipc.REALSENSE_FRAME) — pas de /dev/video* à ouvrir, on relit juste
+        # le fichier comme SharedFrameCamera le fait pour fall/fire_detection.
+        src_str = str(self.source)
+        cap = None
+        shared_frame_path = None
+        if src_str.startswith('/dev/') or src_str.isdigit():
+            cap = cv2.VideoCapture(int(self.source) if src_str.isdigit() else self.source)
+            if not cap.isOpened():
+                print(f"[ERR] Impossible d'ouvrir : {self.source}")
+                return
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        else:
+            shared_frame_path = src_str
+            print(f"[INFO] Lecture frame partagée : {shared_frame_path}")
 
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        # Débit de lecture plafonné pour la frame partagée : inutile de relire
+        # (et de refaire tourner l'inférence TensorRT sur) le même fichier
+        # plus vite que la Thor ne le pousse (30 fps, voir THOR.md).
+        _SHARED_FRAME_FPS = 15
+        _shared_min_dt = 1.0 / _SHARED_FRAME_FPS
+        _shared_last   = 0.0
 
         frame_idx   = 0
         last_res    = []
         gesture_buf = []
 
         while self._running:
-            ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.05); continue
+            if shared_frame_path is not None:
+                dt = time.time() - _shared_last
+                if dt < _shared_min_dt:
+                    time.sleep(_shared_min_dt - dt)
+                _shared_last = time.time()
+                frame = cv2.imread(shared_frame_path)
+                if frame is None:
+                    continue
+            else:
+                ret, frame = cap.read()
+                if not ret:
+                    time.sleep(0.05); continue
 
             frame_idx += 1
 
@@ -180,7 +207,8 @@ class RPSVision:
             with self._lock:
                 self._frame = out.copy()
 
-        cap.release()
+        if cap is not None:
+            cap.release()
 
 # ── Test standalone ───────────────────────────────────────────────────────────
 if __name__ == "__main__":

@@ -60,8 +60,13 @@ def _get_service():
     return build('gmail', 'v1', credentials=creds)
 
 
-def _extract_body(payload) -> str:
-    """Extrait le texte brut d'un payload Gmail (récursif pour multipart)."""
+def _extract_body(payload):
+    """Cherche récursivement la première partie text/plain d'un payload Gmail
+    (multipart). Retourne None si aucune n'existe — le sentinel doit rester
+    distinct d'une chaîne "trouvée mais vide", sinon une pièce jointe ou une
+    partie non-texte rencontrée AVANT la vraie partie texte dans `parts`
+    court-circuiterait la boucle avec un texte placeholder au lieu de
+    continuer à chercher."""
     mime = payload.get('mimeType', '')
     if mime == 'text/plain':
         data = payload.get('body', {}).get('data', '')
@@ -72,7 +77,7 @@ def _extract_body(payload) -> str:
             text = _extract_body(part)
             if text:
                 return text
-    return '(pas de contenu texte)'
+    return None
 
 
 def _lire_handler(n: int = 5, non_lus: bool = True) -> str:
@@ -93,7 +98,7 @@ def _lire_handler(n: int = 5, non_lus: bool = True) -> str:
                 userId='me', id=m['id'], format='full'
             ).execute()
             headers = {h['name']: h['value'] for h in msg['payload']['headers']}
-            body = _extract_body(msg['payload'])
+            body = _extract_body(msg['payload']) or '(pas de contenu texte)'
             if len(body) > _SUMMARIZE_THRESHOLD:
                 contenu = f'[résumé] {_summarize(body)}'
             else:

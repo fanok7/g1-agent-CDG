@@ -123,16 +123,26 @@ def _parse_description(desc: str) -> dict:
     while i < len(lines):
         line = lines[i]
         if line.lower().startswith('réservé par'):
-            # Les 3 lignes suivantes : nom, email, tel
+            # Jusqu'à 3 lignes suivantes : nom, email, tel — email et tel sont
+            # optionnels dans creer_rdv, donc absents du texte (pas de ligne
+            # vide, elle est filtrée par `lines`) plutôt que vides : on avance
+            # du nombre de lignes RÉELLEMENT consommées, jamais d'un offset
+            # fixe, sinon un champ manquant décale silencieusement la lecture
+            # du "Poste souhaité" qui suit.
+            consumed = 0
             if i + 1 < len(lines):
-                result['nom']   = lines[i + 1]
+                result['nom'] = lines[i + 1]
+                consumed = 1
             if i + 2 < len(lines) and '@' in lines[i + 2]:
                 result['email'] = lines[i + 2]
+                consumed = 2
                 if i + 3 < len(lines) and re.match(r'[\d\s\+\-\.]{8,}', lines[i + 3]):
                     result['tel'] = lines[i + 3]
+                    consumed = 3
             elif i + 2 < len(lines) and re.match(r'[\d\s\+\-\.]{8,}', lines[i + 2]):
                 result['tel'] = lines[i + 2]
-            i += 4
+                consumed = 2
+            i += consumed + 1
         elif line.lower().startswith('poste souhaité'):
             if i + 1 < len(lines):
                 result['poste'] = lines[i + 1]
@@ -648,26 +658,27 @@ def _handler_creneaux(date: str = "", **_kwargs) -> str:
     return f"Créneaux disponibles le {label} : {', '.join(slots)}."
 
 
-register(
-    {
-        "name": "creneaux_disponibles",
-        "description": (
-            "Retourne les créneaux libres de 15 minutes pour une date donnée (défaut : demain). "
-            "À appeler pour proposer des horaires à un candidat qui souhaite prendre rendez-vous."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "date": {
-                    "type": "string",
-                    "description": "Date au format YYYY-MM-DD. Omis = demain.",
-                },
-            },
-            "required": [],
-        },
-    },
-    _handler_creneaux,
-)
+# Désactivé le 2026-09-21 : la prise de nouveau RDV n'a plus lieu d'être sur place.
+# register(
+#     {
+#         "name": "creneaux_disponibles",
+#         "description": (
+#             "Retourne les créneaux libres de 15 minutes pour une date donnée (défaut : demain). "
+#             "À appeler pour proposer des horaires à un candidat qui souhaite prendre rendez-vous."
+#         ),
+#         "parameters": {
+#             "type": "object",
+#             "properties": {
+#                 "date": {
+#                     "type": "string",
+#                     "description": "Date au format YYYY-MM-DD. Omis = demain.",
+#                 },
+#             },
+#             "required": [],
+#         },
+#     },
+#     _handler_creneaux,
+# )
 
 
 # ── Tool 6 : créer un rendez-vous ─────────────────────────────────────────────
@@ -728,29 +739,28 @@ def _handler_creer_rdv(nom: str = "", tel: str = "", email: str = "",
     )
 
 
-# Réactivé le 2026-08-31 (aux côtés du QR self-service afficher_qr_rdv_ecran —
-# les deux chemins de prise de RDV coexistent désormais).
-register(
-    {
-        "name": "creer_rdv",
-        "description": (
-            "Crée un rendez-vous de 15 minutes dans le Google Agenda de Samy. "
-            "À appeler après avoir obtenu le consentement du candidat sur le créneau choisi. "
-            "Requiert : nom, date (YYYY-MM-DD), heure (ex: '10h30'). "
-            "Optionnel : tel, email, poste."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "nom":   {"type": "string", "description": "Nom complet du candidat."},
-                "tel":   {"type": "string", "description": "Numéro de téléphone."},
-                "email": {"type": "string", "description": "Adresse email."},
-                "poste": {"type": "string", "description": "Poste souhaité (ex: Agent d'accueil aéroportuaire)."},
-                "date":  {"type": "string", "description": "Date au format YYYY-MM-DD."},
-                "heure": {"type": "string", "description": "Heure de début, ex: '10h', '10h30', '10:30'."},
-            },
-            "required": ["nom", "date", "heure"],
-        },
-    },
-    _handler_creer_rdv,
-)
+# Désactivé le 2026-09-21 : la prise de nouveau RDV n'a plus lieu d'être sur place.
+# register(
+#     {
+#         "name": "creer_rdv",
+#         "description": (
+#             "Crée un rendez-vous de 15 minutes dans le Google Agenda de Samy. "
+#             "À appeler après avoir obtenu le consentement du candidat sur le créneau choisi. "
+#             "Requiert : nom, date (YYYY-MM-DD), heure (ex: '10h30'). "
+#             "Optionnel : tel, email, poste."
+#         ),
+#         "parameters": {
+#             "type": "object",
+#             "properties": {
+#                 "nom":   {"type": "string", "description": "Nom complet du candidat."},
+#                 "tel":   {"type": "string", "description": "Numéro de téléphone."},
+#                 "email": {"type": "string", "description": "Adresse email."},
+#                 "poste": {"type": "string", "description": "Poste souhaité (ex: Agent d'accueil aéroportuaire)."},
+#                 "date":  {"type": "string", "description": "Date au format YYYY-MM-DD."},
+#                 "heure": {"type": "string", "description": "Heure de début, ex: '10h', '10h30', '10:30'."},
+#             },
+#             "required": ["nom", "date", "heure"],
+#         },
+#     },
+#     _handler_creer_rdv,
+# )

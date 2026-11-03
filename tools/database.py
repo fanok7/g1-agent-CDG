@@ -1,3 +1,4 @@
+import os
 from config import SUPABASE_URL, SUPABASE_KEY
 from tools.registry import register
 
@@ -19,14 +20,16 @@ try:
     from supabase import create_client
     _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     test = _supabase.table('formation').select('id').limit(1).execute()
-    print(f'[SUPABASE] Connexion OK — {len(test.data)} ligne(s) de test')
+    if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+        print(f'[SUPABASE] Connexion OK — {len(test.data)} ligne(s) de test')
 except Exception as e:
     print(f'[SUPABASE] ERREUR connexion : {e}')
     _supabase = None
 
 
 def _handler(nom: str) -> str:
-    print(f'[SUPABASE] Recherche nom="{nom}"')
+    if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+        print(f'[SUPABASE] Recherche nom="{nom}"')
     if _supabase is None:
         return 'Erreur : base de données non connectée.'
     if not _terme_valide(nom):
@@ -70,7 +73,8 @@ register(
 
 
 def _handler_badge(nom: str = None, numero_badge: str = None) -> str:
-    print(f'[SUPABASE] Recherche badge nom="{nom}" numero="{numero_badge}"')
+    if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+        print(f'[SUPABASE] Recherche badge nom="{nom}" numero="{numero_badge}"')
     if _supabase is None:
         return 'Erreur : base de données non connectée.'
     if not numero_badge and not _terme_valide(nom):

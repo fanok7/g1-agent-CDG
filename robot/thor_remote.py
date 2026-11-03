@@ -1,27 +1,38 @@
 """
 robot/thor_remote.py — Démarrage/vérification de la vision déportée sur la Thor.
 
-La RealSense D435I et la caméra UGREEN sont branchées sur la Jetson Thor
-(192.168.123.166, pas ce Jetson) depuis que face_id/RealSense y ont été
-déplacés pour profiter de son GPU. Deux services systemd --user tournent
-là-bas en continu (Restart=always, activés au boot via `loginctl enable-linger
-unitree`) :
-    g1-face-id.service         → vision/face_id/face_id.py (InsightFace GPU)
-    g1-realsense-push.service  → vision/realsense_remote_push.py
+La caméra UGREEN 2K est branchée sur la Jetson Thor (192.168.123.166, pas ce
+Jetson) depuis que face_id y a été déplacé pour profiter de son GPU. Un service
+systemd --user tourne là-bas en continu (Restart=always, activé au boot via
+`loginctl enable-linger unitree`) :
+    g1-face-id.service  → vision/face_id/face_id.py (InsightFace GPU + YOLO)
 
-Ils persistent déjà seuls (systemd), donc ce module n'est PAS ce qui les
-maintient en vie — il sert juste à ce que `main.py` vérifie/relance
-explicitement au démarrage d'une session, pour un état propre et visible dans
-les logs plutôt que de supposer silencieusement que la Thor va bien.
+Il persiste déjà seul (systemd), donc ce module n'est PAS ce qui le maintient en
+vie — il sert juste à ce que `main.py` le vérifie/relance explicitement au
+démarrage d'une session, pour un état propre et visible dans les logs plutôt que
+de supposer silencieusement que la Thor va bien.
+
+`g1-realsense-push.service` ne figure plus ici : la RealSense D435I est restée
+branchée sur CE Jetson et n'est plus utilisée, donc le service bouclait sur un
+crash côté Thor (`pyrealsense2` n'y voit aucun device). Il a été désactivé.
 
 Connexion SSH par clé (pas de mot de passe en dur) — la clé publique de ce
 Jetson doit être dans ~/.ssh/authorized_keys sur la Thor (déjà fait).
 """
 
+import os
 import subprocess
 
+_VERBOSE_LOGS = os.environ.get('G1_VERBOSE_LOGS', '0') == '1'
+
+
+def _vprint(*args, **kwargs):
+    if _VERBOSE_LOGS:
+        print(*args, **kwargs)
+
+
 THOR_HOST = "unitree@192.168.123.166"
-THOR_SERVICES = ("g1-face-id.service", "g1-realsense-push.service")
+THOR_SERVICES = ("g1-face-id.service",)
 SSH_TIMEOUT = 10
 
 
@@ -34,7 +45,7 @@ def _ssh(cmd: str) -> subprocess.CompletedProcess:
 
 
 def ensure_thor_vision_running() -> None:
-    """Redémarre les services vision sur la Thor pour un état propre à chaque
+    """Redémarre le service vision sur la Thor pour un état propre à chaque
     session. Best-effort : la Thor peut être injoignable (Wi-Fi coupé,
     éteinte...) sans que ça bloque le reste de l'agent — les tools vision
     dégraderont proprement (frames périmées) plutôt que de planter."""
@@ -46,16 +57,16 @@ def ensure_thor_vision_running() -> None:
         if r.returncode != 0:
             print(f"[THOR] Échec redémarrage services vision : {r.stderr.strip()}")
             return
-        print("[THOR] Vision déportée (face_id + RealSense) redémarrée sur la Thor.")
+        _vprint("[THOR] Vision déportée (face_id) redémarrée sur la Thor.")
     except subprocess.TimeoutExpired:
-        print("[THOR] Injoignable (timeout SSH) — vision déportée non vérifiée, "
+        _vprint("[THOR] Injoignable (timeout SSH) — vision déportée non vérifiée, "
               "les tools vision utiliseront des données périmées si c'est le cas.")
     except Exception as e:
         print(f"[THOR] Erreur vérification vision déportée : {e}")
 
 
 def thor_vision_status() -> dict:
-    """État des deux services (pour diagnostic/dashboard) — {service: 'active'|'failed'|...}."""
+    """État des services (pour diagnostic/dashboard) — {service: 'active'|'failed'|...}."""
     try:
         r = _ssh(
             "export XDG_RUNTIME_DIR=/run/user/$(id -u); "

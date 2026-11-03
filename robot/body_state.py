@@ -84,13 +84,16 @@ def _deg(rad):
     return round(math.degrees(rad))
 
 
-def _decrire_bras(q, sh_pitch, sh_roll, elbow, cote):
+def _decrire_bras(q, sh_pitch, sh_roll, elbow, cote, gauche=False):
     """Description en langage naturel d'un bras à partir de 3 angles."""
     pitch, roll, elb = q[sh_pitch], q[sh_roll], q[elbow]
-    # ShoulderPitch négatif = bras vers l'avant/haut (cf. POSES dans arm_sdk.py)
-    if pitch < -0.5:
+    # ShoulderPitch négatif = bras vers l'avant/haut À DROITE ; signe MIROIR à
+    # gauche (cf. POSES dans arm_sdk.py : 'devant' R_ShPitch=-80°, mais
+    # 'devant_gauche' L_ShPitch=+80° pour le même mouvement bras vers l'avant).
+    pitch_avant = -pitch if gauche else pitch
+    if pitch_avant < -0.5:
         pos = "levé vers l'avant"
-    elif pitch > 0.8:
+    elif pitch_avant > 0.8:
         pos = "tiré vers l'arrière"
     elif abs(roll) > 0.5:
         pos = "écarté sur le côté"
@@ -152,7 +155,7 @@ def read_body_state():
     return {
         'posture':      _posture(msg.imu_state),
         'bras': [
-            _decrire_bras(q, _L_SH_PITCH, _L_SH_ROLL, _L_ELBOW, "Bras gauche"),
+            _decrire_bras(q, _L_SH_PITCH, _L_SH_ROLL, _L_ELBOW, "Bras gauche", gauche=True),
             _decrire_bras(q, _R_SH_PITCH, _R_SH_ROLL, _R_ELBOW, "Bras droit"),
         ],
         'temp_max':     t_max,

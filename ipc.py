@@ -107,11 +107,10 @@ réactions de fin de manche, consommé par main._gesture_cmd_loop."""
 LAST_CONVERSATION_END = "/tmp/last_conversation_end"
 """Horodatage de fin de la dernière conversation, lu par face_greeting_loop
 pour ne pas saluer un inconnu juste après un départ (INCONNU_COOLDOWN).
-
-⚠ AUCUN producteur : ce fichier n'est écrit nulle part dans le dépôt. La
-lecture retombe donc toujours sur 0.0 et le cooldown ne s'applique jamais.
-Conservé tel quel (comportement inchangé) — à trancher : écrire le fichier en
-fin de conversation, ou retirer le garde-fou."""
+Écrit par agent/events.py::_set_responding(False) — à chaque fois que le
+robot arrête de parler (fin de tour), pas seulement en toute fin de
+conversation : ça prolonge naturellement le cooldown tant qu'un échange est
+en cours, et le fait expirer 25s après la dernière phrase du robot."""
 
 TABLET_CLIENT_LOG = "/tmp/tablet_client.log"
 """Journal des erreurs JS renvoyées par la tablette (POST /clientlog)."""
@@ -134,6 +133,7 @@ CLEANUP_AT_STARTUP = (
     FIRE_STATE,
     QR_STATE,
     AI_PAUSED_FLAG,
+    LAST_CONVERSATION_END,
 )
 """Fichiers supprimés par main.py au lancement. Un résidu de crash bloquerait
 sinon le micro (RESPONDING_FLAG), le micro ET le haut-parleur (AI_PAUSED_FLAG),

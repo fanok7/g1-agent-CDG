@@ -23,7 +23,7 @@ LANGUES_INTERFACE = ("fr", "en", "es", "de", "it", "ar", "zh", "ja")
 
 # Libellés que le CODE pousse de lui-même (réflexes) : ceux-là doivent
 # impérativement être traduisibles, le visiteur ne les a pas choisis.
-LIBELLES_REFLEXES = choices.OUI_NON + choices.TRANSPORT
+LIBELLES_REFLEXES = choices.TRANSPORT
 
 
 def test_libelles_reflexes_tous_traduisibles():
@@ -67,7 +67,3 @@ def test_schema_du_tool_cite_les_libelles_canoniques():
         assert "'%s'" % libelle in description, (
             "%r absent de la description de proposer_choix" % libelle
         )
-
-
-def test_fmt_rend_la_notation_du_prompt():
-    assert choices.fmt(choices.OUI_NON) == "['Oui','Non']"

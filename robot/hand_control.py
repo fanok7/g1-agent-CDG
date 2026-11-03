@@ -119,12 +119,12 @@ class HandControl:
 
     def read_palm(self) -> list | None:
         """Retourne les 112 valeurs du capteur tactile de paume (0–4095)."""
-        r = self._client.read_holding_registers(REG_PALM, PALM_COUNT, DEVICE_ID)
+        r = self._client.read_holding_registers(REG_PALM, count=PALM_COUNT, device_id=DEVICE_ID)
         return list(r.registers) if not r.isError() else None
 
     def read_force(self) -> list | None:
         """Retourne la force actuelle des 6 doigts (grammes, signé)."""
-        r = self._client.read_holding_registers(REG_FORCE_ACT, 6, DEVICE_ID)
+        r = self._client.read_holding_registers(REG_FORCE_ACT, count=6, device_id=DEVICE_ID)
         if r.isError():
             return None
         packed = struct.pack('>' + 'H' * 6, *r.registers)
@@ -132,7 +132,7 @@ class HandControl:
 
     def read_positions(self) -> list | None:
         """Retourne la position actuelle des 6 doigts (0–1000)."""
-        r = self._client.read_holding_registers(REG_POS_ACT, 6, DEVICE_ID)
+        r = self._client.read_holding_registers(REG_POS_ACT, count=6, device_id=DEVICE_ID)
         return list(r.registers) if not r.isError() else None
 
     # ── Analyse paume ──────────────────────────────────────────────────────
@@ -171,4 +171,4 @@ class HandControl:
         if not self.is_connected():
             log.warning('[HAND:%s] Écriture ignorée — non connecté.', self.side)
             return
-        self._client.write_registers(register, values, DEVICE_ID)
+        self._client.write_registers(register, values, device_id=DEVICE_ID)

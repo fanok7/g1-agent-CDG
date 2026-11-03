@@ -27,22 +27,26 @@ tourner l'agent (logs, logique, décisions).
 ```
 ┌─ Jetson THOR (192.168.123.166) ──────────────┐        ┌─ Jetson Orin NX (192.168.123.164) ─────────────┐
 │  Caméras branchées ICI physiquement :         │        │  main.py (agent, asyncio)                       │
-│   • UGREEN (reconnaissance faciale)           │        │   ├─ hardware.init() (bras, audio, DDS eth0)    │
-│   • RealSense D435I (scan billet, objets)     │        │   ├─ thor_remote.ensure_thor_vision_running()   │
-│                                                │        │   │     └─ SSH (clé) → redémarre les 2 services │
-│  g1-face-id.service (systemd --user)          │        │   │        systemd sur la Thor, à chaque lancement│
-│   vision/face_id/face_id.py                   │        │   └─ _supervise(vision_server.py)                │
-│   • InsightFace (buffalo_m) → CUDAExecutionProvider     │        │        vision/vision_server.py (Flask :8080)   │
-│   • YOLO (yolo26n.onnx)     → CUDAExecutionProvider     │        │         reçoit tout, ne calcule RIEN            │
+│   • UGREEN 2K (reconnaissance faciale + YOLO) │        │   ├─ hardware.init() (bras, audio, DDS eth0)    │
+│   • (HBVCAM : plus branchée)                  │        │   ├─ thor_remote.ensure_thor_vision_running()   │
+│   • (RealSense : restée sur l'Orin, inutilisée)│        │   │     └─ SSH (clé) → redémarre le service     │
+│                                                │        │   │        systemd sur la Thor, à chaque lancement│
+│  g1-face-id.service (systemd --user)          │        │   └─ _supervise(vision_server.py)                │
+│   vision/face_id/face_id.py                   │        │        vision/vision_server.py (Flask :8080)   │
+│   • InsightFace (buffalo_m) → CUDAExecutionProvider     │        │         reçoit tout, ne calcule RIEN            │
+│   • YOLO (yolo26n.onnx)     → CUDAExecutionProvider     │        │                                                  │
 │   • capture UGREEN, partagée entre les deux   │        │                                                  │
+│     (voir CAMERA_IDS — nommée "ugreen" dans   │        │                                                  │
+│     les routes/IPC pour des raisons historiques,│        │                                                  │
+│     l'UGREEN est bien la caméra ouverte)       │        │                                                  │
 │                                                │  POST  │  ┌────────────────────────────────────────┐      │
 │   ──────────────────────────────────────────► │ ─────► │  │ /push_face_state    → face_id_state.json│      │
 │   ──────────────────────────────────────────► │ ─────► │  │ /push_ugreen_frame  → latest_ugreen.jpg │      │
 │   ──────────────────────────────────────────► │ ─────► │  │ /push_yolo_ugreen   → fusion YOLO       │      │
 │                                                │        │  └────────────────────────────────────────┘      │
-│  g1-realsense-push.service (systemd --user)   │        │                                                  │
-│   vision/realsense_remote_push.py             │  POST  │  /push_realsense → latest_realsense.jpg         │
-│   • capture RealSense, 30 fps                 │ ─────► │                                                  │
+│  g1-realsense-push.service : DÉSACTIVÉ        │        │  /push_realsense : plus personne ne l'alimente  │
+│   (la D435I est restée sur l'Orin, inutilisée │        │   → latest_realsense.jpg jamais écrit, donc     │
+│    — pyrealsense2 ne voit rien sur la Thor)   │        │     scanner_billet sans source                  │
 └────────────────────────────────────────────────┘        │  ── Consommateurs de ces fichiers ──             │
                                                             │   • tools/face_id_tool.py  (identifier_personne)│
                                                             │   • tools/vision_tool.py   (ce_que_je_vois)     │
@@ -57,8 +61,8 @@ tourner l'agent (logs, logique, décisions).
 
 | Composant | Où | Rôle |
 |-----------|-----|------|
-| `vision/face_id/face_id.py` | **Thor** | InsightFace (visages) + YOLO (objets), sur la même frame UGREEN capturée une seule fois. POST les résultats. |
-| `vision/realsense_remote_push.py` | **Thor** | Capture RealSense D435I, POST chaque frame JPEG (30 fps). |
+| `vision/face_id/face_id.py` | **Thor** | InsightFace (visages) + YOLO (objets), sur la même frame UGREEN 2K capturée une seule fois (voir CAMERA_IDS, où `UGREEN` est en tête). POST les résultats. |
+| `vision/realsense_remote_push.py` | ~~Thor~~ | **Hors service** : la D435I est restée branchée sur l'Orin NX et n'est plus utilisée. Service `g1-realsense-push` désactivé (il bouclait sur un crash, `pyrealsense2` ne voyant aucun device sur la Thor). |
 | `vision/vision_server.py` | **Orin NX** | Ne fait plus AUCUNE inférence. Reçoit les POST, fusionne UGREEN+RealSense, écrit `/tmp/vision_state.json`, sert le stream MJPEG et `/detections`. |
 | `robot/thor_remote.py` | **Orin NX** | Appelé une fois au démarrage de `main.py` : SSH vers la Thor, redémarre les deux services systemd pour un état propre à chaque session. Best-effort (Thor injoignable ⇒ log, pas de crash). |
 
@@ -71,7 +75,9 @@ tourner l'agent (logs, logique, décisions).
 | `POST /push_yolo_ugreen` | face_id.py (Thor) | JSON `[{"label","conf","x","y","cam"}, ...]` | fusionné dans `/tmp/vision_state.json` |
 | `POST /push_realsense` | realsense_remote_push.py (Thor) | JPEG brut | `/tmp/latest_realsense.jpg` |
 | `GET /detections` | — | JSON détections courantes | — |
-| `GET /stream`, `/stream/realsense`, `/stream/face` | — | MJPEG annoté | — |
+| `GET /stream` | — | MJPEG : **objets YOLO + visages fusionnés** sur la même frame UGREEN | — |
+| `GET /stream/face` | — | Alias de `/stream` (même caméra, mêmes annotations depuis la fusion) | — |
+| `GET /stream/realsense` | — | MJPEG RealSense brut — **plus alimenté** | — |
 
 Ces fichiers `/tmp/*` sont exactement ceux que lisaient déjà les tools avant ce
 changement (voir § IPC de [CLAUDE.md](CLAUDE.md)) — leur contrat n'a pas changé,

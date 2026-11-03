@@ -13,15 +13,18 @@ def find_microphone():
     for i, d in enumerate(devices):
         if d['max_input_channels'] > 0 and 'MIC' in d['name'].upper():
             sr = int(d['default_samplerate'])
-            print(f'[MICRO] {d["name"]} index={i} sr={sr}')
+            if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+                print(f'[MICRO] {d["name"]} index={i} sr={sr}')
             return i, sr
     for i, d in enumerate(devices):
         if d['max_input_channels'] > 0 and 'USB' in d['name'].upper():
             sr = int(d['default_samplerate'])
-            print(f'[MICRO] fallback {d["name"]} index={i} sr={sr}')
+            if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+                print(f'[MICRO] fallback {d["name"]} index={i} sr={sr}')
             return i, sr
     sr = int(sd.query_devices(0)['default_samplerate'])
-    print(f'[MICRO] fallback index=0 sr={sr}')
+    if os.environ.get('G1_VERBOSE_LOGS', '0') == '1':
+        print(f'[MICRO] fallback index=0 sr={sr}')
     return 0, sr
 
 

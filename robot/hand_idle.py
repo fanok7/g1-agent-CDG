@@ -14,10 +14,18 @@ Connexion non-bloquante et tolérante aux pannes : si les mains ne répondent
 pas, l'agent continue de fonctionner sans elles (juste un warning au log).
 """
 
+import os
 import time
 import math
 import random
 import threading
+
+_VERBOSE_LOGS = os.environ.get('G1_VERBOSE_LOGS', '0') == '1'
+
+
+def _vprint(*args, **kwargs):
+    if _VERBOSE_LOGS:
+        print(*args, **kwargs)
 from pymodbus.client import ModbusTcpClient
 
 HANDS = {
@@ -148,7 +156,7 @@ class InspireHand:
         if base_pose is None:
             base_pose = self.get_position()
             if base_pose is None:
-                print(f"[HAND_IDLE] Impossible de lire la position de {self.name}, idle non démarrée")
+                _vprint(f"[HAND_IDLE] Impossible de lire la position de {self.name}, idle non démarrée")
                 return
         self._idle_stop_event = threading.Event()
         self._idle_thread = threading.Thread(
@@ -184,10 +192,10 @@ def _connect_all():
             _hands[k] = h
             ok.append(cfg["name"])
         else:
-            print(f"[HAND_IDLE] Main {cfg['name']} ({cfg['ip']}) injoignable — idle désactivée pour cette main")
+            _vprint(f"[HAND_IDLE] Main {cfg['name']} ({cfg['ip']}) injoignable — idle désactivée pour cette main")
     _available = len(ok) > 0
     if ok:
-        print(f"[HAND_IDLE] Mains connectées : {', '.join(ok)}")
+        _vprint(f"[HAND_IDLE] Mains connectées : {', '.join(ok)}")
 
 
 def start():
